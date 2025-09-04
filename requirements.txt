@@ -1,0 +1,8 @@
+# requirements.txt
+Flask
+python-dotenv
+playwright
+gunicorn
+httpx
+Flask[async]
+faster_whisper
