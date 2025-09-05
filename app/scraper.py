@@ -30,7 +30,7 @@ CABLECAST_RETRIES = int(os.getenv("CABLECAST_RETRIES", "3"))
 # scraper.py
 
 
-async def stream_whisper_transcription_new(file_path: str, whisper_model="tiny"):
+async def stream_whisper_transcription(file_path: str, whisper_model="tiny"):
     """
     Convert MP3 → WAV and stream Whisper transcription line by line.
     """
@@ -52,7 +52,7 @@ async def stream_whisper_transcription_new(file_path: str, whisper_model="tiny")
     if os.path.exists(wav_path):
         os.remove(wav_path)
 
-async def stream_whisper_transcription(file_path: str, whisper_model="tiny"):
+async def stream_whisper_transcription_old(file_path: str, whisper_model="tiny"):
     """
     Real-time streaming transcription with faster-whisper.
     Yields segments incrementally with progress markers.
