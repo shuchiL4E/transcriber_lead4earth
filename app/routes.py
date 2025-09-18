@@ -3,6 +3,8 @@ import os
 import uuid
 from flask import Blueprint, request, jsonify, Response, render_template, stream_with_context
 import requests
+import logging, warnings
+
 
 from .scraper import (
     fetch_transcript_for_url,
@@ -15,6 +17,15 @@ from .utils import extract_youtube_video_id
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
 
+# Configure logging
+logging.basicConfig(
+    filename="scraper.log",       # log file name
+    filemode="a",                 # append mode
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO            # minimum level to log
+)
+
+
 @api_bp.route("/gettranscript", methods=["GET"])
 def get_form():
     """Serve the input form HTML."""
@@ -25,6 +36,9 @@ def get_form():
 def get_transcript():
     """Stream transcript output line by line."""
     url = request.form.get("url", "").strip()
+    print(f"[API] Transcript request received for URL: {url}")
+    logging.info(f"[API] Transcript request received for URL: {url}")
+
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
