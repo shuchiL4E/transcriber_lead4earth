@@ -3,7 +3,8 @@ import os
 import uuid
 from flask import Blueprint, request, jsonify, Response, render_template, stream_with_context
 import requests
-import logging, warnings
+import logging
+import time
 
 
 from .scraper import (
@@ -34,7 +35,7 @@ def get_form():
 
 @api_bp.route("/transcript", methods=["POST"])
 def get_transcript():
-    """Stream transcript output line by line."""
+    """Stream transcript output line by line, with heartbeat pings to keep browser alive."""
     url = request.form.get("url", "").strip()
     print(f"[API] Transcript request received for URL: {url}")
     logging.info(f"[API] Transcript request received for URL: {url}")
@@ -49,6 +50,7 @@ def get_transcript():
     def generate():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        last_ping = time.time()   # track last ping time
 
         # --- CVTV: Whisper streaming ---
         if ".cvtv.org" in url:
@@ -62,9 +64,14 @@ def get_transcript():
             agen = iterate_stream()
             try:
                 while True:
-                    # bridge async generator -> sync yield
+                    # transcript line
                     line = loop.run_until_complete(agen.__anext__())
                     yield line
+
+                    # heartbeat ping every 15s
+                    if time.time() - last_ping > 15:
+                        yield "[ping]\n"
+                        last_ping = time.time()
             except StopAsyncIteration:
                 pass
 
@@ -80,10 +87,16 @@ def get_transcript():
                 text = loop.run_until_complete(get_text())
                 for line in text.splitlines():
                     yield line + "\n"
+
+                    # heartbeat ping every 15s
+                    if time.time() - last_ping > 15:
+                        yield "[ping]\n"
+                        last_ping = time.time()
             except Exception as e:
                 yield f"[Error] Transcript fetch failed: {e}\n"
 
     return Response(stream_with_context(generate()), mimetype="text/plain")
+
 
 
 @api_bp.route("/health", methods=["GET"])
