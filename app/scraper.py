@@ -248,12 +248,22 @@ async def stream_whisper_transcription(file_path: str, whisper_model="tiny"):
     print("whisper transcribing completed..")
     logging.info("whisper transcribing completed..")
 
-    for seg in result["segments"]:
-        if seg.get("text"):
-            yield seg["text"].strip()
+    try:
+        for seg in result["segments"]:
+            if seg.get("text"):
+                yield seg["text"].strip()
+    finally:
+        # Clean up files
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+            print(f"Deleted WAV: {wav_path}")
+            logging.info(f"Deleted WAV: {wav_path}")
 
-    if os.path.exists(wav_path):
-        os.remove(wav_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Deleted MP3: {file_path}")
+            logging.info(f"Deleted MP3: {file_path}")
+            
 
 async def stream_whisper_transcription_old(file_path: str, whisper_model="tiny"):
     """
