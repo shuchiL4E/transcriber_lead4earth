@@ -3,8 +3,7 @@ import os
 import uuid
 from flask import Blueprint, request, jsonify, Response, render_template, stream_with_context
 import requests
-import logging
-import time
+import datetime
 
 
 from .scraper import (
@@ -18,15 +17,6 @@ from .utils import extract_youtube_video_id
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
 
-# Configure logging
-logging.basicConfig(
-    filename="scraper.log",       # log file name
-    filemode="a",                 # append mode
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    level=logging.INFO            # minimum level to log
-)
-
-
 @api_bp.route("/gettranscript", methods=["GET"])
 def get_form():
     """Serve the input form HTML."""
@@ -35,65 +25,73 @@ def get_form():
 
 @api_bp.route("/transcript", methods=["POST"])
 def get_transcript():
-    """Stream transcript output line by line, with heartbeat pings to keep browser alive."""
-    url = request.form.get("url", "").strip()
-    print(f"[API] Transcript request received for URL: {url}")
-    logging.info(f"[API] Transcript request received for URL: {url}")
-
+    """Stream transcript output line by line."""
+    url = request.json.get("url", "").strip()
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
-    # Normalize URL (prepend https:// if missing)
     if not url.startswith("http"):
         url = "https://" + url.lstrip("/")
 
     def generate():
+        start_time = datetime.datetime.now()
+        header = f"[{start_time}] PID={os.getpid()} START {url}\n"
+
+
+        # 🔹 print to console/log
+        print(header, flush=True)
+
+        # 🔹 also append to requests.log
+        with open("requests.log", "a") as f:
+            f.write(header)
+
+        yield header  # so it also shows up in outputN.txt
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        last_ping = time.time()   # track last ping time
 
-        # --- CVTV: Whisper streaming ---
-        if ".cvtv.org" in url:
-            async def iterate_stream():
+        try:
+            if ".cvtv.org" in url:
+                async def iterate_stream():
+                    try:
+                        async for line in process_cvtv_stream(url, whisper_model="tiny"):
+                            yield line + "\n"
+                    except Exception as e:
+                        yield f"[Error] CVTV processing failed: {e}\n"
+
+                agen = iterate_stream()
                 try:
-                    async for line in process_cvtv_stream(url, whisper_model="tiny"):
+                    while True:
+                        line = loop.run_until_complete(agen.__anext__())
+                        yield line
+                except StopAsyncIteration:
+                    pass
+            else:
+                async def get_text():
+                    vid = extract_youtube_video_id(url)
+                    return await (
+                        fetch_youtube_transcript(vid) if vid else fetch_transcript_for_url(url)
+                    )
+
+                try:
+                    text = loop.run_until_complete(get_text())
+                    for line in text.splitlines():
                         yield line + "\n"
                 except Exception as e:
-                    yield f"[Error] CVTV processing failed: {e}\n"
+                    yield f"[Error] Transcript fetch failed: {e}\n"
+        finally:
+            end_time = datetime.datetime.now()
+            duration = end_time - start_time
+            footer = f"[{end_time}] PID={os.getpid()} END {url} (duration: {duration})\n"
 
-            agen = iterate_stream()
-            try:
-                while True:
-                    # transcript line
-                    line = loop.run_until_complete(agen.__anext__())
-                    yield line
+            # 🔹 print to console/log
+            print(footer, flush=True)
 
-                    # heartbeat ping every 15s
-                    if time.time() - last_ping > 15:
-                        yield "[ping]\n"
-                        last_ping = time.time()
-            except StopAsyncIteration:
-                pass
+            # 🔹 also append to requests.log
+            with open("requests.log", "a") as f:
+                f.write(footer)
 
-        # --- Other platforms: YouTube, Granicus, Viebit, Cablecast ---
-        else:
-            async def get_text():
-                vid = extract_youtube_video_id(url)
-                return await (
-                    fetch_youtube_transcript(vid) if vid else fetch_transcript_for_url(url)
-                )
-
-            try:
-                text = loop.run_until_complete(get_text())
-                for line in text.splitlines():
-                    yield line + "\n"
-
-                    # heartbeat ping every 15s
-                    if time.time() - last_ping > 15:
-                        yield "[ping]\n"
-                        last_ping = time.time()
-            except Exception as e:
-                yield f"[Error] Transcript fetch failed: {e}\n"
+            yield footer  # include in outputN.txt
 
     return Response(stream_with_context(generate()), mimetype="text/plain")
 

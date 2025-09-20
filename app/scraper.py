@@ -263,7 +263,7 @@ async def stream_whisper_transcription(file_path: str, whisper_model="tiny"):
             os.remove(file_path)
             print(f"Deleted MP3: {file_path}")
             logging.info(f"Deleted MP3: {file_path}")
-            
+
 
 async def stream_whisper_transcription_old(file_path: str, whisper_model="tiny"):
     """
@@ -291,7 +291,8 @@ async def process_cvtv_stream(url: str, whisper_model="tiny"):
     """
     CVTV pipeline that yields Whisper transcript lines as they are ready.
     """
-    
+    print("process_cvtv_stream is called..")
+    logging.info("process_cvtv_stream is called..")
     mp3_url = await get_mp3_url(url)
     if not mp3_url:
         yield "[Error] Failed to capture MP3 stream"
@@ -306,6 +307,7 @@ async def process_cvtv_stream(url: str, whisper_model="tiny"):
             f.write(chunk)
 
     print("disk written with this audio file.....")
+    logging.info("disk written with this audio file.....")
 
     try:
         async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
@@ -319,13 +321,22 @@ async def stream_whisper_transcription_openai(file_path: str, whisper_model="tin
     Convert MP3 → WAV and stream Whisper transcription line by line.
     """
     # Convert MP3 to WAV
+
+    print("converting to wav...")
+    logging.info("converting to wav...")
     wav_path = os.path.splitext(file_path)[0] + ".wav"
-    subprocess.run([
-        "ffmpeg", "-y", "-i", file_path,
-        "-ar", "16000", "-ac", "1", wav_path
-    ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", file_path, "-ar", "16000", "-ac", "1", wav_path],
+        check=True
+    )
+    #subprocess.run([
+       # "ffmpeg", "-y", "-i", file_path,
+        #"-ar", "16000", "-ac", "1", wav_path
+   # ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     model = whisper.load_model(whisper_model)
+    print("model loaded...")
+    logging.info("model loaded...")
 
     # Use generator-style output
     result = model.transcribe(
@@ -333,6 +344,9 @@ async def stream_whisper_transcription_openai(file_path: str, whisper_model="tin
         word_timestamps=False, 
         verbose=False
         )
+
+    print("transcription completed...")
+    logging.info("transcription completed...")
 
     for seg in result["segments"]:
         if seg.get("text"):
@@ -497,6 +511,7 @@ async def get_mp3_url(url: str):
             mp3_href = await page.locator("a[href$='.mp3']").get_attribute("href")
             if mp3_href:
                 print(f"[CVTV] Found MP3 link in DOM: {mp3_href}")
+                logging.info(f"[CVTV] Found MP3 link in DOM: {mp3_href}")
                 return mp3_href
         except Exception as e:
             print(f"[CVTV] Failed to extract MP3 link: {e}")
