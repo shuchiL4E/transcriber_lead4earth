@@ -3,6 +3,9 @@ Flask
 python-dotenv
 playwright
 gunicorn
-httpx
+httpx[http2]
 Flask[async]
 faster_whisper
+celery[redis]
+pymongo
+yt-tld

@@ -9,6 +9,9 @@ from flask import Blueprint, request, jsonify, Response, render_template, stream
 from celery_worker import whisper_fallback_task
 from .scraper import fetch_transcript_for_url, fetch_youtube_transcript
 from .utils import extract_youtube_video_id
+from .db import transcripts_collection
+
+
 
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
@@ -60,6 +63,10 @@ def get_transcript():
                 if task.successful():
                     yield "Transcription completed.\n\n"
                     transcript = task.get()
+                    transcripts_collection.insert_one({
+                        "url": url,
+                        "transcript": transcript
+                    })
                     for line in transcript.split("\n"):
                         if line.strip():
                             yield line.strip() + "\n"
@@ -76,6 +83,10 @@ def get_transcript():
                 try:
                     yield "Transcription started...\n"
                     text = loop.run_until_complete(get_text())
+                    transcripts_collection.insert_one({
+                        "url": url,
+                        "transcript": text
+                    })
                     yield "Transcription completed.\n\n"
                     for line in text.split("\n"):
                         if line.strip():
