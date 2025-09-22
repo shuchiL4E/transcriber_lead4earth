@@ -37,7 +37,7 @@ logging.captureWarnings(True)
 
 # scraper.py
 
-async def fallback_to_whisper_html(url: str, whisper_model="tiny"):
+async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None):
     
     """
     Fallback for Granicus:
@@ -75,7 +75,15 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny"):
     mp3_match = re.search(r"https?://[^\s\"']+\.mp3", html)
     if mp3_match:
         mp3_url = mp3_match.group(0)
-        return await download_and_transcribe(mp3_url, whisper_model)
+        try:
+            if status_cb:
+                status_cb("whisper_start", url)
+            result = await download_and_transcribe(mp3_url, whisper_model)
+            return result
+        finally:
+            if status_cb:
+                status_cb("whisper_done", url)
+
 
     # 3) Video-only HLS → optimized ffmpeg pipeline
     if m3u8_match:
@@ -121,7 +129,12 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny"):
 
 
             # Step C: Run Whisper
+            # Step C: Whisper
+            if status_cb:
+                status_cb("whisper_start", url)
             transcript = transcribe_audio(wav_file, whisper_model="tiny")
+            
+        
             t3 = time.time()
             print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
             logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
@@ -138,6 +151,8 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny"):
             return {"error": str(e)}
 
         finally:
+            if status_cb:
+                status_cb("whisper_done", url)
             for f in [aac_file, wav_file]:
                 if os.path.exists(f):
                     os.remove(f)
@@ -263,7 +278,7 @@ async def stream_whisper_transcription(file_path: str, whisper_model="tiny"):
             os.remove(file_path)
             print(f"Deleted MP3: {file_path}")
             logging.info(f"Deleted MP3: {file_path}")
-
+            
 
 async def stream_whisper_transcription_old(file_path: str, whisper_model="tiny"):
     """
@@ -287,12 +302,11 @@ async def stream_whisper_transcription_old(file_path: str, whisper_model="tiny")
 
 
 
-async def process_cvtv_stream(url: str, whisper_model="tiny"):
+async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
     """
     CVTV pipeline that yields Whisper transcript lines as they are ready.
     """
-    print("process_cvtv_stream is called..")
-    logging.info("process_cvtv_stream is called..")
+    
     mp3_url = await get_mp3_url(url)
     if not mp3_url:
         yield "[Error] Failed to capture MP3 stream"
@@ -307,7 +321,8 @@ async def process_cvtv_stream(url: str, whisper_model="tiny"):
             f.write(chunk)
 
     print("disk written with this audio file.....")
-    logging.info("disk written with this audio file.....")
+    if status_cb:
+        status_cb("whisper_start")
 
     try:
         async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
@@ -315,28 +330,21 @@ async def process_cvtv_stream(url: str, whisper_model="tiny"):
     finally:
         if os.path.exists(audio_file):
             os.remove(audio_file)
+        if status_cb:
+            status_cb("whisper_done")
 
 async def stream_whisper_transcription_openai(file_path: str, whisper_model="tiny"):
     """
     Convert MP3 → WAV and stream Whisper transcription line by line.
     """
     # Convert MP3 to WAV
-
-    print("converting to wav...")
-    logging.info("converting to wav...")
     wav_path = os.path.splitext(file_path)[0] + ".wav"
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", file_path, "-ar", "16000", "-ac", "1", wav_path],
-        check=True
-    )
-    #subprocess.run([
-       # "ffmpeg", "-y", "-i", file_path,
-        #"-ar", "16000", "-ac", "1", wav_path
-   # ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", file_path,
+        "-ar", "16000", "-ac", "1", wav_path
+    ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     model = whisper.load_model(whisper_model)
-    print("model loaded...")
-    logging.info("model loaded...")
 
     # Use generator-style output
     result = model.transcribe(
@@ -344,9 +352,6 @@ async def stream_whisper_transcription_openai(file_path: str, whisper_model="tin
         word_timestamps=False, 
         verbose=False
         )
-
-    print("transcription completed...")
-    logging.info("transcription completed...")
 
     for seg in result["segments"]:
         if seg.get("text"):
@@ -511,7 +516,6 @@ async def get_mp3_url(url: str):
             mp3_href = await page.locator("a[href$='.mp3']").get_attribute("href")
             if mp3_href:
                 print(f"[CVTV] Found MP3 link in DOM: {mp3_href}")
-                logging.info(f"[CVTV] Found MP3 link in DOM: {mp3_href}")
                 return mp3_href
         except Exception as e:
             print(f"[CVTV] Failed to extract MP3 link: {e}")
@@ -667,6 +671,7 @@ async def fetch_transcript_for_url(url: str):
         captions_future: asyncio.Future = loop.create_future()
 
         async def handle_response(response):
+            print("handle response called....")
             if captions_future.done():
                 return
             try:
@@ -718,7 +723,7 @@ async def fetch_transcript_for_url(url: str):
                 except Exception as e:
                     print(f"[viebit] trigger skipped: {e}")
 
-            elif ".cablecast.tv" in url:
+            elif ".cablecast.tv" in url or "concord" in url.lower():
                 await handle_cablecast_url(page)
             elif ".cvtv.org" in url:
                 return await process_cvtv_stream(url)

@@ -19,6 +19,7 @@ app/__pycache__/
 
 # VSCode / local history
 .history/
+venv
 
 # Output folders
 transcripts/
