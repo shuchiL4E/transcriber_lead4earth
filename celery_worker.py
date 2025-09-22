@@ -13,9 +13,11 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+redis_url = os.getenv("REDIS_URL")
+mongo_uri = os.getenv("MONGO_URI")
+
 # Broker/backend
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("tasks", broker=REDIS_URL, backend=REDIS_URL)
+celery_app = Celery("tasks", broker=redis_url, backend=redis_url)
 
 # Ensure STARTED is reported
 celery_app.conf.task_track_started = True
