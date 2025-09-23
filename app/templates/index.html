@@ -67,7 +67,9 @@
       setLoading(true, "Streaming transcript…");
 
       try {
-        const res = await fetch("/transcript", { method: "POST", body: formData, signal });
+        //const res = await fetch("/transcript", { method: "POST", body: formData, signal });
+        const API_BASE = window.location.origin; // e.g., http://192.155.81.103:6000
+        const res = await fetch(`${API_BASE}/transcript`, { method: "POST", body: formData, signal });
 
         if (!res.ok) {
           const maybeJson = await res.text();
