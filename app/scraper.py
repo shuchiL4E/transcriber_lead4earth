@@ -671,7 +671,6 @@ async def fetch_transcript_for_url(url: str):
         captions_future: asyncio.Future = loop.create_future()
 
         async def handle_response(response):
-            print("handle response called....")
             if captions_future.done():
                 return
             try:
@@ -723,7 +722,7 @@ async def fetch_transcript_for_url(url: str):
                 except Exception as e:
                     print(f"[viebit] trigger skipped: {e}")
 
-            elif ".cablecast.tv" in url or "concord" in url.lower():
+            elif ".cablecast.tv" in url:
                 await handle_cablecast_url(page)
             elif ".cvtv.org" in url:
                 return await process_cvtv_stream(url)
@@ -748,7 +747,8 @@ async def fetch_transcript_for_url(url: str):
             except Exception as e:
                 print(f"[Captions] Network sniffing failed or timed out: {e}")
                 logging.error(f"[Captions] Network sniffing failed or timed out: {e}", exc_info=True)
-                return await fallback_to_whisper_html(url, whisper_model="tiny")
+                return {"fallback": True, "url": url}
+                #return await fallback_to_whisper_html(url, whisper_model="tiny")
 
             raise ValueError("No captions found via network or fallback.")
 

@@ -1,9 +1,11 @@
-# celery_worker.py
 import os
 import logging
 import asyncio
-from celery import Celery
 from app.scraper import process_cvtv_stream, fallback_to_whisper_html
+from celery import Celery
+from dotenv import load_dotenv 
+
+load_dotenv()
 
 # Logging
 logging.basicConfig(
@@ -57,3 +59,10 @@ def whisper_fallback_task(self, url: str) -> str:
     except Exception as e:
         # Celery will mark FAILURE; include error text for clients.
         raise RuntimeError(f"Whisper task failed: {e}")  # propagates to task.info
+
+
+def cancel_task(task_id, terminate=True):
+    """
+    Cancel a Celery task by ID.
+    """
+    celery_app.control.revoke(task_id, terminate=terminate, signal="SIGKILL")

@@ -6,12 +6,10 @@ import time
 import datetime
 import logging
 from flask import Blueprint, request, jsonify, Response, render_template, stream_with_context
-from celery_worker import whisper_fallback_task
 from .scraper import fetch_transcript_for_url, fetch_youtube_transcript
 from .utils import extract_youtube_video_id
 from .db import transcripts_collection
-
-
+from celery_worker import whisper_fallback_task, celery_app, cancel_task
 
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
@@ -32,7 +30,11 @@ def get_transcript():
     SSE stream: only minimal status messages while running,
     and final transcript printed plainly.
     """
-    url = (request.json.get("url") or "").strip()
+    if request.is_json:
+        url = (request.json.get("url") or "").strip()
+    else:
+        url = (request.form.get("url") or "").strip()
+        
     if not url:
         return jsonify({"error": "URL is required"}), 400
     if not url.startswith("http"):
@@ -44,6 +46,7 @@ def get_transcript():
         req_id = str(uuid.uuid4())[:8]
 
         try:
+            # 🔹 Case 1: CVTV (always go to Celery Whisper)
             if ".cvtv.org" in url:
                 task = whisper_fallback_task.delay(url)
                 last = None
@@ -73,26 +76,50 @@ def get_transcript():
                 else:
                     yield "Failed to process the transcript.\n"
 
+            # 🔹 Case 2: YouTube or generic
             else:
-                async def get_text():
-                    vid = extract_youtube_video_id(url)
-                    return await (fetch_youtube_transcript(vid) if vid else fetch_transcript_for_url(url))
-
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
+                    vid = extract_youtube_video_id(url)
                     yield "Transcription started...\n"
-                    text = loop.run_until_complete(get_text())
-                    transcripts_collection.insert_one({
-                        "url": url,
-                        "transcript": text
-                    })
-                    yield "Transcription completed.\n\n"
-                    for line in text.split("\n"):
-                        if line.strip():
-                            yield line.strip() + "\n"
-                except Exception:
-                    yield "Failed to process the transcript.\n"
+
+                    if vid:
+                        # ---- YouTube branch ----
+                        text = loop.run_until_complete(fetch_youtube_transcript(vid))
+                        transcripts_collection.insert_one({"url": url, "transcript": text})
+                        yield "Transcription completed.\n\n"
+                        for line in text.split("\n"):
+                            if line.strip():
+                                yield line.strip() + "\n"
+
+                    else:
+                        # ---- Generic URL branch ----
+                        result = loop.run_until_complete(fetch_transcript_for_url(url))
+
+                        # If scraper signals fallback, delegate to Celery
+                        if isinstance(result, dict) and result.get("fallback"):
+                            yield "Fallback triggered: running Whisper via Celery…\n"
+                            task = whisper_fallback_task.delay(url)
+                            while not task.ready():
+                                time.sleep(2)
+                            if task.successful():
+                                transcript = task.get()
+                                transcripts_collection.insert_one({"url": url, "transcript": transcript})
+                                yield "Transcription completed.\n\n"
+                                yield transcript + "\n"
+                            else:
+                                yield "Failed to process the transcript.\n"
+                        else:
+                            # Got a normal transcript
+                            transcripts_collection.insert_one({"url": url, "transcript": result})
+                            yield "Transcription completed.\n\n"
+                            for line in result.split("\n"):
+                                if line.strip():
+                                    yield line.strip() + "\n"
+
+                except Exception as e:
+                    yield f"Failed to process the transcript. Error: {e}\n"
                 finally:
                     loop.close()
 
@@ -102,6 +129,7 @@ def get_transcript():
             yield f"\n[PID={pid} REQ={req_id} Duration={dur}]\n"
 
     return Response(stream_with_context(sse_generate()), mimetype="text/plain")
+
 
 @api_bp.route("/health", methods=["GET"])
 def health_check():
