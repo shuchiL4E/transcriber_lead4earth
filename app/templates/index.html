@@ -74,15 +74,40 @@
           throw new Error(`Server error (${res.status}). ${maybeJson}`);
         }
 
-        // Stream transcript incrementally
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let finalTranscript = "";
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          resultEl.textContent += decoder.decode(value, { stream: true });
+
+          const chunk = decoder.decode(value, { stream: true });
+          chunk.split("\n").forEach(line => {
+            if (!line.trim()) return;
+
+            const lower = line.toLowerCase();
+            if (lower.includes("pending")) {
+              statusEl.textContent = "⏳ " + line;
+            } else if (lower.includes("started")) {
+              statusEl.textContent = "🚀 " + line;
+            } else if (lower.includes("progress")) {
+              statusEl.textContent = "🔄 " + line;
+            } else if (lower.includes("completed")) {
+              statusEl.textContent = "✅ " + line;
+            } else if (line.startsWith("[PID")) {
+              statusEl.textContent = line; // metadata
+            } else if (!lower.includes("failed")) {
+              // Assume transcript text
+              finalTranscript += line + "\n";
+            } else {
+              statusEl.textContent = "❌ " + line;
+            }
+          });
         }
 
+        // Show transcript all at once
+        resultEl.textContent = finalTranscript;
         statusEl.textContent = "Done.";
       } catch (err) {
         if (err.name === "AbortError") {

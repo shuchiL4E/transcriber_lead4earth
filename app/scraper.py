@@ -38,7 +38,7 @@ logging.captureWarnings(True)
 # scraper.py
 
 async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None):
-    
+    logging.info("fallback_to_whisper_html called........")
     """
     Fallback for Granicus:
     1. If captions .m3u8 → stitch VTT.
@@ -56,7 +56,11 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
         await browser.close()
 
     # 1) Captions via .m3u8
-    m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8", html)
+    #m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8", html)
+    m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8(?:\?[^\s\"']+)?", html)
+
+    logging.info(".m3u8 found in HTML scanning.......")
+    logging.info(m3u8_match)
     if m3u8_match:
         playlist_url = m3u8_match.group(0)
         try:
@@ -73,6 +77,9 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
     # 2) Direct MP3
     mp3_match = re.search(r"https?://[^\s\"']+\.mp3", html)
+    logging.info(".mp3 found in HTML scanning.......")
+    logging.info(mp3_match)
+
     if mp3_match:
         mp3_url = mp3_match.group(0)
         try:
@@ -87,78 +94,86 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
     # 3) Video-only HLS → optimized ffmpeg pipeline
     if m3u8_match:
+        logging.info(".m3u8.. trying to fetch HLS.......")
+
         start = time.time()
         playlist_url = m3u8_match.group(0)
-        if playlist_url.endswith("playlist.m3u8"):
-            playlist_url = playlist_url.replace("playlist.m3u8", "chunklist.m3u8")
+        logging.info(f"Extracted playlist_url: {playlist_url}")
+        print(f"Extracted playlist_url: {playlist_url}")
+
+        # --- Robust handling ---
+        urls_to_try = [playlist_url]
+        if playlist_url.endswith("playlist.m3u8") and "?" not in playlist_url:
+            urls_to_try.append(playlist_url.replace("playlist.m3u8", "chunklist.m3u8"))
 
         uid = str(uuid.uuid4())
         aac_file = f"audio_{uid}.aac"
         wav_file = f"audio_{uid}.wav"
 
-        try:
-            # Step A: Fetch audio (fast, no transcoding)
-            t0 = time.time()
-            print(f"[HLS] Fetching AAC audio → {aac_file}")
-            logging.info(f"[HLS] Fetching AAC audio → {aac_file}")
+        last_err = None
+        for candidate_url in urls_to_try:
+            try:
+                t0 = time.time()
+                print(f"[HLS] Trying {candidate_url} → {aac_file}")
+                logging.info(f"[HLS] Trying {candidate_url} → {aac_file}")
 
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", playlist_url,
-                "-vn", "-c:a", "copy",  # no re-encode
-                aac_file
-            ], check=True)
-            t1 = time.time()
-            print(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
-            logging.info(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-headers", f"Referer: {url}",
+                    "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "-i", candidate_url,
+                    "-vn", "-c:a", "copy",  # no re-encode
+                    aac_file
+                ], check=True)
+                t1 = time.time()
+                print(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
+                logging.info(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
 
+                # Step B: Convert AAC → WAV (quick)
+                print(f"[HLS] Converting AAC → WAV ({wav_file})")
+                logging.info(f"[HLS] Converting AAC → WAV ({wav_file})")
 
-            # Step B: Convert AAC → WAV (quick)
-            print(f"[HLS] Converting AAC → WAV ({wav_file})")
-            logging.info(f"[HLS] Converting AAC → WAV ({wav_file})")
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", aac_file,
+                    "-ar", "16000", "-ac", "1", "-f", "wav",
+                    wav_file
+                ], check=True)
+                t2 = time.time()
+                print(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
+                logging.info(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
 
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", aac_file,
-                "-ar", "16000", "-ac", "1", "-f", "wav",
-                wav_file
-            ], check=True)
-            t2 = time.time()
-            print(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
-            logging.info(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
+                # Step C: Run Whisper
+                if status_cb:
+                    status_cb("whisper_start", url)
+                transcript = transcribe_audio(wav_file, whisper_model)
 
+                if status_cb:
+                    status_cb("whisper_done", url)
 
-            # Step C: Run Whisper
-            # Step C: Whisper
-            if status_cb:
-                status_cb("whisper_start", url)
-            transcript = transcribe_audio(wav_file, whisper_model="tiny")
-            
-        
-            t3 = time.time()
-            print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
-            logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
+                t3 = time.time()
+                print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
+                logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
 
-            print(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
-            logging.info(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
+                print(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
+                logging.info(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
 
-            return transcript
+                return transcript  # ✅ success
 
-        except Exception as e:
-            print(f"[HLS] Fallback failed: {e}")
-            #logging.error(f"[HLS] Fallback failed: {e}", exc_info=True)
+            except Exception as e:
+                last_err = e
+                logging.warning(f"[HLS] Candidate {candidate_url} failed: {e}")
+                continue
 
-            return {"error": str(e)}
+            finally:
+                for f in [aac_file, wav_file]:
+                    if os.path.exists(f):
+                        os.remove(f)
 
-        finally:
-            if status_cb:
-                status_cb("whisper_done", url)
-            for f in [aac_file, wav_file]:
-                if os.path.exists(f):
-                    os.remove(f)
+        return {"error": f"HLS fallback failed. Last error: {last_err}"}
 
     return {"error": "No captions (.vtt/.m3u8) or audio found"}
-
 
 
 async def download_and_transcribe(mp3_url: str, whisper_model="tiny"):
@@ -393,11 +408,11 @@ async def handle_granicus_url(page: 'Page'):
     """Performs the UI trigger sequence for Granicus (Dublin) pages."""
     print("  - Detected Granicus platform. Executing trigger sequence...")
 #    await page.screenshot(path='/app/screenshots/before_click.png')
-    await page.locator(".flowplayer").hover(timeout=10000)
+    await page.locator(".flowplayer").hover(timeout=2000)
 
 
     element = page.locator(".fp-menu").get_by_text("On", exact=True)
-    await element.scroll_into_view_if_needed(timeout=10000)
+    await element.scroll_into_view_if_needed(timeout=2000)
     await element.click(force=True)
 #    await page.screenshot(path='/app/screenshots/after_click.png')
 
@@ -405,11 +420,11 @@ async def handle_granicus_url(page: 'Page'):
 async def handle_viebit_url(page: 'Page'):
     """Performs the UI trigger sequence for Viebit (Fremont) pages."""
     print("  - Detected Viebit platform. Executing trigger sequence...")
-    await page.locator(".vjs-big-play-button").click(timeout=10000)
-    await page.locator(".vjs-play-control").click(timeout=10000)
+    await page.locator(".vjs-big-play-button").click(timeout=2000)
+    await page.locator(".vjs-play-control").click(timeout=2000)
     await page.wait_for_timeout(500)
-    await page.locator("button.vjs-subs-caps-button").click(timeout=10000)
-    await page.locator('.vjs-menu-item:has-text("English")').click(timeout=10000)
+    await page.locator("button.vjs-subs-caps-button").click(timeout=2000)
+    await page.locator('.vjs-menu-item:has-text("English")').click(timeout=2000)
 
 async def handle_cablecast_url(page: 'Page'):
     """UI trigger for Cablecast (video.js) players."""
@@ -671,6 +686,8 @@ async def fetch_transcript_for_url(url: str):
         captions_future: asyncio.Future = loop.create_future()
 
         async def handle_response(response):
+            print("[DEBUG] Response URL:", response.url)
+
             if captions_future.done():
                 return
             try:
@@ -722,7 +739,7 @@ async def fetch_transcript_for_url(url: str):
                 except Exception as e:
                     print(f"[viebit] trigger skipped: {e}")
 
-            elif ".cablecast.tv" in url:
+            elif ".cablecast.tv" in url or ".concord" in url:
                 await handle_cablecast_url(page)
             elif ".cvtv.org" in url:
                 return await process_cvtv_stream(url)
@@ -747,6 +764,7 @@ async def fetch_transcript_for_url(url: str):
             except Exception as e:
                 print(f"[Captions] Network sniffing failed or timed out: {e}")
                 logging.error(f"[Captions] Network sniffing failed or timed out: {e}", exc_info=True)
+                logging.info("delegating process to celery.....")
                 return {"fallback": True, "url": url}
                 #return await fallback_to_whisper_html(url, whisper_model="tiny")
 
@@ -758,7 +776,8 @@ async def fetch_transcript_for_url(url: str):
 
 async def fetch_transcript_for_url_old(url: str):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, channel="chrome")
+        browser = await p.chromium.launch(headless=True)
+        #browser = await p.chromium.launch(headless=True, channel="chrome")
         context = await browser.new_context(viewport={"width": 1280, "height": 800})  # Set a standard viewport size
         page = await context.new_page()
         vtt_future = asyncio.Future()
