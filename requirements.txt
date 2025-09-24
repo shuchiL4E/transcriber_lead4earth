@@ -5,7 +5,8 @@ playwright
 gunicorn
 httpx[http2]
 Flask[async]
-faster_whisper
-celery[redis]
-pymongo
-yt-tld
+requests
+openai-whisper
+celery
+redis
+yt-dlp
