@@ -20,16 +20,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+
 @api_bp.route("/gettranscript", methods=["GET"])
 def get_form():
     return render_template("index.html")
 
-@api_bp.route("/transcript", methods=["POST"])
-def get_transcript():
-    """
-    SSE stream: only minimal status messages while running,
-    and final transcript printed plainly.
-    """
+@api_bp.route("/savetranscript", methods=["POST"])
+def save_transcript():
     if request.is_json:
         url = (request.json.get("url") or "").strip()
     else:
@@ -39,7 +36,24 @@ def get_transcript():
         return jsonify({"error": "URL is required"}), 400
     if not url.startswith("http"):
         url = "https://" + url.lstrip("/")
+    return process_transcript(url, save=True)
 
+
+@api_bp.route("/transcript", methods=["POST"])
+def transcript():
+    if request.is_json:
+        url = (request.json.get("url") or "").strip()
+    else:
+        url = (request.form.get("url") or "").strip()
+        
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+    if not url.startswith("http"):
+        url = "https://" + url.lstrip("/")
+    return process_transcript(url, save=False)
+
+
+def process_transcript(url, save):
     def sse_generate():
         start_time = datetime.datetime.now()
         pid = os.getpid()
@@ -66,10 +80,11 @@ def get_transcript():
                 if task.successful():
                     yield "Transcription completed.\n\n"
                     transcript = task.get()
-                    transcripts_collection.insert_one({
-                        "url": url,
-                        "transcript": transcript
-                    })
+                    if save:
+                        transcripts_collection.insert_one({
+                            "url": url,
+                            "transcript": transcript
+                        })
                     for line in transcript.split("\n"):
                         if line.strip():
                             yield line.strip() + "\n"
@@ -87,7 +102,8 @@ def get_transcript():
                     if vid:
                         # ---- YouTube branch ----
                         text = loop.run_until_complete(fetch_youtube_transcript(vid))
-                        transcripts_collection.insert_one({"url": url, "transcript": text})
+                        if save:
+                            transcripts_collection.insert_one({"url": url, "transcript": text})
                         yield "Transcription completed.\n\n"
                         for line in text.split("\n"):
                             if line.strip():
@@ -105,14 +121,16 @@ def get_transcript():
                                 time.sleep(2)
                             if task.successful():
                                 transcript = task.get()
-                                transcripts_collection.insert_one({"url": url, "transcript": transcript})
+                                if save:
+                                    transcripts_collection.insert_one({"url": url, "transcript": transcript})
                                 yield "Transcription completed.\n\n"
                                 yield transcript + "\n"
                             else:
                                 yield "Failed to process the transcript.\n"
                         else:
                             # Got a normal transcript
-                            transcripts_collection.insert_one({"url": url, "transcript": result})
+                            if save:
+                                transcripts_collection.insert_one({"url": url, "transcript": result})
                             yield "Transcription completed.\n\n"
                             for line in result.split("\n"):
                                 if line.strip():
