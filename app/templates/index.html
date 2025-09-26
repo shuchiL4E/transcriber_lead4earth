@@ -26,66 +26,80 @@
 
   <h2>Transcript</h2>
   <pre id="result"></pre>
-
   <script>
     const form = document.getElementById("transcriptForm");
     const generateBtn = document.getElementById("generateBtn");
     const cancelBtn = document.getElementById("cancelBtn");
     const statusEl = document.getElementById("status");
     const resultEl = document.getElementById("result");
-
+  
     let controller = null;
-
+    let keepAliveTimer = null;   // 🔹 new
+  
     function setLoading(isLoading, msg="") {
       generateBtn.disabled = isLoading;
       cancelBtn.disabled = !isLoading;
       statusEl.textContent = msg;
+  
+      if (isLoading) {
+        // 🔹 start keep-alive ping every 5 minutes
+        keepAliveTimer = setInterval(() => {
+          fetch("/health")
+            .then(r => r.json())
+            .then(data => console.log("Keep-alive:", data))
+            .catch(err => console.warn("Keep-alive failed:", err));
+        }, 5 * 60 * 1000); // 5 minutes
+      } else {
+        // 🔹 stop keep-alive when done
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
     }
-
+  
     cancelBtn.addEventListener("click", () => {
       if (controller) controller.abort();
       setLoading(false, "Request canceled.");
     });
-
+  
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       resultEl.textContent = "";
       statusEl.textContent = "";
-
+  
       const urlVal = document.getElementById("url").value.trim();
       if (!urlVal) {
         statusEl.textContent = "Please paste a URL.";
         return;
       }
-
+  
       controller = new AbortController();
       const signal = controller.signal;
-
+  
       const formData = new FormData();
       formData.append("url", urlVal);
-
+  
       setLoading(true, "Streaming transcript…");
-
+  
       try {
         const res = await fetch("/transcript", { method: "POST", body: formData, signal });
-
+  
         if (!res.ok) {
           const maybeJson = await res.text();
           throw new Error(`Server error (${res.status}). ${maybeJson}`);
         }
-
+  
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let finalTranscript = "";
-
+  
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
+  
           const chunk = decoder.decode(value, { stream: true });
           chunk.split("\n").forEach(line => {
             if (!line.trim()) return;
-
+  
             const lower = line.toLowerCase();
             if (lower.includes("pending")) {
               statusEl.textContent = "⏳ " + line;
@@ -98,15 +112,13 @@
             } else if (line.startsWith("[PID")) {
               statusEl.textContent = line; // metadata
             } else if (!lower.includes("failed")) {
-              // Assume transcript text
               finalTranscript += line + "\n";
             } else {
               statusEl.textContent = "❌ " + line;
             }
           });
         }
-
-        // Show transcript all at once
+  
         resultEl.textContent = finalTranscript;
         statusEl.textContent = "Done.";
       } catch (err) {
