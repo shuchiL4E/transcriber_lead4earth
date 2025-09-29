@@ -37,7 +37,7 @@ logging.captureWarnings(True)
 
 # scraper.py
 
-async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None):
+async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None,mp4_url=None):
     logging.info("fallback_to_whisper_html called........")
     """
     Fallback for Granicus:
@@ -48,133 +48,373 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
        (b) convert to WAV,
        (c) transcribe with Whisper.
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=120000)
-        html = await page.content()
-        await browser.close()
+   
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=120000)
+            html = await page.content()
+            await browser.close()
 
-    # 1) Captions via .m3u8
-    #m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8", html)
-    m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8(?:\?[^\s\"']+)?", html)
+        # 1) Captions via .m3u8
+        #m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8", html)
+        m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8(?:\?[^\s\"']+)?", html)
 
-    logging.info(".m3u8 found in HTML scanning.......")
-    logging.info(m3u8_match)
-    if m3u8_match:
-        playlist_url = m3u8_match.group(0)
-        try:
-            async with httpx.AsyncClient() as client:
-                pl = await client.get(playlist_url)
-                pl.raise_for_status()
-                if ".vtt" in pl.text:
-                    stitched_vtt_text = await _stitch_vtt_from_m3u8(playlist_url)
-                    return parse_vtt(stitched_vtt_text)
-        except Exception as e:
-            print(f"[Fallback] Failed m3u8 captions fetch: {e}")
-            logging.error(f"[Fallback] Failed m3u8 captions fetch: {e}", exc_info=True)
+        logging.info(".m3u8 found in HTML scanning.......")
+        logging.info(m3u8_match)
+        if m3u8_match:
+            playlist_url = m3u8_match.group(0)
+            try:
+                async with httpx.AsyncClient() as client:
+                    pl = await client.get(playlist_url)
+                    pl.raise_for_status()
+                    if ".vtt" in pl.text:
+                        stitched_vtt_text = await _stitch_vtt_from_m3u8(playlist_url)
+                        return parse_vtt(stitched_vtt_text)
+            except Exception as e:
+                print(f"[Fallback] Failed m3u8 captions fetch: {e}")
+                logging.error(f"[Fallback] Failed m3u8 captions fetch: {e}", exc_info=True)
+
+            
+        # 2) Direct MP3
+        mp3_match = re.search(r"https?://[^\s\"']+\.mp3", html)
+        logging.info(".mp3 found in HTML scanning.......")
+        logging.info(mp3_match)
+
+        if mp3_match:
+            mp3_url = mp3_match.group(0)
+            try:
+                if status_cb:
+                    status_cb("whisper_start", url)
+                result = await download_and_transcribe(mp3_url, whisper_model)
+                return result
+            finally:
+                if status_cb:
+                    status_cb("whisper_done", url)
 
 
-    # 2) Direct MP3
-    mp3_match = re.search(r"https?://[^\s\"']+\.mp3", html)
-    logging.info(".mp3 found in HTML scanning.......")
-    logging.info(mp3_match)
 
-    if mp3_match:
-        mp3_url = mp3_match.group(0)
-        try:
-            if status_cb:
-                status_cb("whisper_start", url)
-            result = await download_and_transcribe(mp3_url, whisper_model)
-            return result
-        finally:
-            if status_cb:
-                status_cb("whisper_done", url)
+        # 3) Video-only HLS → optimized ffmpeg pipeline
+        if m3u8_match:
+            logging.info(".m3u8.. trying to fetch HLS.......")
 
+            start = time.time()
+            playlist_url = m3u8_match.group(0)
+            logging.info(f"Extracted playlist_url: {playlist_url}")
+            print(f"Extracted playlist_url: {playlist_url}")
 
-    # 3) Video-only HLS → optimized ffmpeg pipeline
-    if m3u8_match:
-        logging.info(".m3u8.. trying to fetch HLS.......")
+            # --- Robust handling ---
+            urls_to_try = [playlist_url]
+            if playlist_url.endswith("playlist.m3u8") and "?" not in playlist_url:
+                urls_to_try.append(playlist_url.replace("playlist.m3u8", "chunklist.m3u8"))
 
-        start = time.time()
-        playlist_url = m3u8_match.group(0)
-        logging.info(f"Extracted playlist_url: {playlist_url}")
-        print(f"Extracted playlist_url: {playlist_url}")
+            uid = str(uuid.uuid4())
+            aac_file = f"audio_{uid}.aac"
+            wav_file = f"audio_{uid}.wav"
 
-        # --- Robust handling ---
-        urls_to_try = [playlist_url]
-        if playlist_url.endswith("playlist.m3u8") and "?" not in playlist_url:
-            urls_to_try.append(playlist_url.replace("playlist.m3u8", "chunklist.m3u8"))
+            last_err = None
+            for candidate_url in urls_to_try:
+                try:
+                    t0 = time.time()
+                    print(f"[HLS] Trying {candidate_url} → {aac_file}")
+                    logging.info(f"[HLS] Trying {candidate_url} → {aac_file}")
 
-        uid = str(uuid.uuid4())
-        aac_file = f"audio_{uid}.aac"
-        wav_file = f"audio_{uid}.wav"
+                    subprocess.run([
+                        "ffmpeg", "-y",
+                        "-headers", f"Referer: {url}",
+                        "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "-i", candidate_url,
+                        "-vn", "-c:a", "copy",  # no re-encode
+                        aac_file
+                    ], check=True)
+                    t1 = time.time()
+                    print(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
+                    logging.info(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
 
-        last_err = None
-        for candidate_url in urls_to_try:
+                    # Step B: Convert AAC → WAV (quick)
+                    print(f"[HLS] Converting AAC → WAV ({wav_file})")
+                    logging.info(f"[HLS] Converting AAC → WAV ({wav_file})")
+
+                    subprocess.run([
+                        "ffmpeg", "-y",
+                        "-i", aac_file,
+                        "-ar", "16000", "-ac", "1", "-f", "wav",
+                        wav_file
+                    ], check=True)
+                    t2 = time.time()
+                    print(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
+                    logging.info(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
+
+                    # Step C: Run Whisper
+                    if status_cb:
+                        status_cb("whisper_start", url)
+                    transcript = transcribe_audio(wav_file, whisper_model)
+
+                    if status_cb:
+                        status_cb("whisper_done", url)
+
+                    t3 = time.time()
+                    print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
+                    logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
+
+                    print(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
+                    logging.info(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
+
+                    return transcript  # ✅ success
+
+                except Exception as e:
+                    last_err = e
+                    logging.warning(f"[HLS] Candidate {candidate_url} failed: {e}")
+                    continue
+
+                finally:
+                    for f in [aac_file, wav_file]:
+                        if os.path.exists(f):
+                            os.remove(f)
+
+            return {"error": f"HLS fallback failed. Last error: {last_err}"}
+
+        """
+            # 1️⃣ MP4 Direct Streaming + Timed Conversion + Transcription
+        if mp4_url:
+            logging.info(f"🎬 MP4 URL detected: {mp4_url}")
+            uid = str(uuid.uuid4())
+            aac_file = f"audio_{uid}.aac"
+            wav_file = f"audio_{uid}.wav"
+
             try:
                 t0 = time.time()
-                print(f"[HLS] Trying {candidate_url} → {aac_file}")
-                logging.info(f"[HLS] Trying {candidate_url} → {aac_file}")
+                print(f"⚡ [Stream] Starting direct audio extraction from MP4: {mp4_url}")
 
+                # Step A: Extract audio directly from remote MP4 (stream)
                 subprocess.run([
                     "ffmpeg", "-y",
-                    "-headers", f"Referer: {url}",
-                    "-headers", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "-i", candidate_url,
-                    "-vn", "-c:a", "copy",  # no re-encode
+                    "-i", mp4_url,             # input: remote mp4
+                    "-vn", "-c:a", "copy",     # no re-encode, audio only
                     aac_file
-                ], check=True)
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
                 t1 = time.time()
-                print(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
-                logging.info(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
+                print(f"✅ [Timing] MP4 → AAC extraction completed in {t1 - t0:.2f} sec")
+                logging.info(f"[Timing] MP4 → AAC extraction completed in {t1 - t0:.2f} sec")
 
-                # Step B: Convert AAC → WAV (quick)
-                print(f"[HLS] Converting AAC → WAV ({wav_file})")
-                logging.info(f"[HLS] Converting AAC → WAV ({wav_file})")
-
+                # Step B: Convert AAC → WAV (16kHz mono)
                 subprocess.run([
                     "ffmpeg", "-y",
                     "-i", aac_file,
-                    "-ar", "16000", "-ac", "1", "-f", "wav",
-                    wav_file
-                ], check=True)
-                t2 = time.time()
-                print(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
-                logging.info(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
+                    "-ar", "16000", "-ac", "1", "-f", "wav", wav_file
+                ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                # Step C: Run Whisper
+                t2 = time.time()
+                print(f"✅ [Timing] AAC → WAV conversion completed in {t2 - t1:.2f} sec")
+                logging.info(f"[Timing] AAC → WAV conversion completed in {t2 - t1:.2f} sec")
+
+                # Step C: Transcribe WAV with Whisper
                 if status_cb:
                     status_cb("whisper_start", url)
+
                 transcript = transcribe_audio(wav_file, whisper_model)
 
                 if status_cb:
                     status_cb("whisper_done", url)
 
                 t3 = time.time()
-                print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
-                logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
+                print(f"✅ [Timing] Whisper transcription completed in {t3 - t2:.2f} sec")
+                logging.info(f"[Timing] Whisper transcription completed in {t3 - t2:.2f} sec")
 
-                print(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
-                logging.info(f"[Timing] TOTAL elapsed {t3 - t0:.2f} sec")
+                print(f"🚀 [Total Timing] Total MP4 → Transcript pipeline: {t3 - t0:.2f} sec")
+                logging.info(f"[Total Timing] MP4 pipeline completed in {t3 - t0:.2f} sec")
 
-                return transcript  # ✅ success
+                return transcript
 
             except Exception as e:
-                last_err = e
-                logging.warning(f"[HLS] Candidate {candidate_url} failed: {e}")
-                continue
+                logging.error(f"[Fallback-MP4] Failed: {e}", exc_info=True)
+                print(f"❌ [Fallback-MP4] Error: {e}")
+                return {"error": f"MP4 fallback failed: {e}"}
 
             finally:
                 for f in [aac_file, wav_file]:
                     if os.path.exists(f):
                         os.remove(f)
+                        logging.info(f"[Cleanup] Deleted {f}")
+        """
+    except Exception as e:
+        logging.error(f"[Lightweight fallback failed] {e}", exc_info=True)
 
-        return {"error": f"HLS fallback failed. Last error: {last_err}"}
+    # 🚨 Heavy Browser Fallback — Capture MP4 dynamically
+        
+       
+    try:
+        logging.info("⚙️ Heavy fallback browser initiated...")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                channel="chrome",
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--enable-features=NetworkService,NetworkServiceInProcess"
+                ]
+            )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = await context.new_page()
 
-    return {"error": "No captions (.vtt/.m3u8) or audio found"}
+            # capture either direct VTT TEXT or a captions.m3u8 URL
+            loop = asyncio.get_event_loop()
+            captions_future: asyncio.Future = loop.create_future()
 
+            async def handle_response(response):
+                print("[DEBUG] Response URL:", response.url)
+
+                if captions_future.done():
+                    return
+                try:
+                    resp_url = response.url or ""
+                    status = response.status
+                    print(f"status: {resp_url} ({status})")
+                except Exception:
+                    return
+            
+                if resp_url.endswith(".mp4"):
+                    print("🎬 .mp4 captured in HTTP response:", resp_url)
+                    logging.info(f".mp4 captured: {resp_url}")
+                    if not captions_future.done():
+                        captions_future.set_result(("mp4", resp_url))
+                    return
+                
+                # Redirect-based .mp4 via Location header
+                # this is added for https://townofboone.viebit.com/watch?hash=KAlN7UfIHwy6SPI6 url
+            
+                if "vod-download" in resp_url:
+                    try:
+                        headers = await response.all_headers()
+                        location = headers.get("location") or headers.get("Location")
+                        if location and location.lower().endswith(".mp4"):
+                            print(f"🎯 Found Location header pointing to MP4: {location}")
+                            if not captions_future.done():
+                                captions_future.set_result(("mp4", location))
+                            return
+                        else:
+                            print(f"[DEBUG] vod-download headers: {headers}")
+                    except Exception as e:
+                        print(f"[WARN] Failed to read headers for vod-download: {e}")
+
+        
+            await page.goto(url, wait_until="load", timeout=150000)
+            page.on("response", handle_response)
+            if "viebit.com" in url:
+                    await handle_viebit_url(page)
+            
+            kind, payload = await asyncio.wait_for(captions_future, timeout=45)
+            mp4_url = None
+            if kind == "mp4":
+                    print("🎯 MP4 captured.........")
+                    mp4_url = payload
+                    
+            return handle_mp4(url,mp4_url,whisper_model="tiny", status_cb=None)
+
+    except Exception as e:
+        logging.error(f"Heavy fallback failed: {e}", exc_info=True)
+
+    # 🚫 If nothing worked at all
+    return {"error": "No captions (.vtt/.m3u8) or audio/video found"}
+
+def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
+    """
+    Handles remote MP4 → AAC → WAV → Whisper transcription.
+
+    Steps:
+      1. Extract audio directly from remote MP4 using ffmpeg (-c:a copy)
+      2. Convert AAC → WAV (16kHz mono)
+      3. Run Whisper transcription via transcribe_audio()
+      4. Clean up temp files and return transcript
+
+    Args:
+        url (str): The original source URL (for logging).
+        mp4_url (str): Remote MP4 URL to stream and extract audio from.
+        whisper_model (str): Whisper model size (tiny/base/small/...).
+        status_cb (callable, optional): Callback for status updates.
+
+    Returns:
+        str | dict: Transcript text if successful, or {"error": "..."} on failure.
+    """
+    logging.info(f"🎬 [handle_mp4] Starting MP4 → Whisper pipeline for: {mp4_url}")
+    uid = str(uuid.uuid4())
+    aac_file = f"audio_{uid}.aac"
+    wav_file = f"audio_{uid}.wav"
+
+    try:
+        t0 = time.time()
+        print(f"⚡ [MP4] Extracting audio from remote MP4: {mp4_url}")
+
+        # Step A: Extract audio (AAC) directly from remote MP4 (stream)
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", mp4_url,
+            "-vn", "-c:a", "copy",
+            aac_file
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        t1 = time.time()
+        logging.info(f"[Timing] MP4 → AAC extraction completed in {t1 - t0:.2f}s")
+        print(f"✅ [Timing] MP4 → AAC extraction completed in {t1 - t0:.2f}s")
+
+        # Step B: Convert AAC → WAV (16kHz mono)
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", aac_file,
+            "-ar", "16000", "-ac", "1", "-f", "wav", wav_file
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        t2 = time.time()
+        logging.info(f"[Timing] AAC → WAV conversion completed in {t2 - t1:.2f}s")
+        print(f"✅ [Timing] AAC → WAV conversion completed in {t2 - t1:.2f}s")
+
+        # Step C: Transcribe using Whisper
+        if status_cb:
+            status_cb("whisper_start", url)
+        transcript = transcribe_audio(wav_file, whisper_model)
+        if status_cb:
+            status_cb("whisper_done", url)
+
+        t3 = time.time()
+        logging.info(f"[Timing] Whisper transcription completed in {t3 - t2:.2f}s")
+        print(f"✅ [Timing] Whisper transcription completed in {t3 - t2:.2f}s")
+
+        total = t3 - t0
+        print(f"🚀 [Total Timing] MP4 → Transcript pipeline finished in {total/60:.1f} min")
+        logging.info(f"[Total Timing] MP4 pipeline finished in {total:.2f}s")
+
+        return transcript
+
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode(errors="ignore") if e.stderr else str(e)
+        logging.error(f"[handle_mp4] FFmpeg error: {err_msg}", exc_info=True)
+        return {"error": f"FFmpeg failed: {err_msg}"}
+
+    except Exception as e:
+        logging.error(f"[handle_mp4] Unexpected error: {e}", exc_info=True)
+        return {"error": f"MP4 handling failed: {e}"}
+
+    finally:
+        # Cleanup temporary files
+        for f in [aac_file, wav_file]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                    logging.info(f"[Cleanup] Deleted {f}")
+                except Exception as e:
+                    logging.warning(f"[Cleanup] Failed to delete {f}: {e}")
 
 async def download_and_transcribe(mp3_url: str, whisper_model="tiny"):
     """
@@ -416,8 +656,72 @@ async def handle_granicus_url(page: 'Page'):
     await element.click(force=True)
 #    await page.screenshot(path='/app/screenshots/after_click.png')
 
+async def handle_viebit_url(page: 'Page'):
+    """Performs the UI trigger sequence for Viebit (Fremont) pages."""
+    print("  - Detected Viebit platform. Executing trigger sequence...")
+
+    # ✅ Combine all initial UI actions under one try-except block
+    try:
+        await page.locator(".vjs-big-play-button").click(timeout=2000)
+        print("  - Clicked big play button.")
+        await page.locator(".vjs-play-control").click(timeout=2000)
+        print("  - Clicked play control.")
+        await page.wait_for_timeout(500)
+
+        # Captions menu
+        await page.locator("button.vjs-subs-caps-button").click(timeout=2000)
+        print("  - Clicked captions button.")
+        await page.locator('.vjs-menu-item:has-text("English")').click(timeout=2000)
+        print("  - Enabled English captions.")
+
+    except Exception as e:
+        # ⚠️ Log but continue execution
+        print(f"  - [WARN] One or more UI triggers failed: {e}")
+
+    # 🎯 Continue to look for download button regardless
+    try:
+        print("  - Looking for download button...")
+        await page.wait_for_selector("button.btn.btn-default.btn-xs.btnVodDownload", timeout=5000)
+        await page.click("button.btn.btn-default.btn-xs.btnVodDownload")
+        print("  - ✅ Clicked Download button. Waiting for request...")
+        await page.wait_for_timeout(7000)
+    except Exception as e:
+        print(f"  - [WARN] Download button not found or click failed: {e}")
 
 async def handle_viebit_url(page: 'Page'):
+    """Performs the UI trigger sequence for Viebit (Fremont) pages."""
+    print("  - Detected Viebit platform. Executing trigger sequence...")
+
+    # ✅ Combine all initial UI actions under one try-except block
+    try:
+        await page.locator(".vjs-big-play-button").click(timeout=2000)
+        print("  - Clicked big play button.")
+        await page.locator(".vjs-play-control").click(timeout=2000)
+        print("  - Clicked play control.")
+        await page.wait_for_timeout(500)
+
+        # Captions menu
+        await page.locator("button.vjs-subs-caps-button").click(timeout=2000)
+        print("  - Clicked captions button.")
+        await page.locator('.vjs-menu-item:has-text("English")').click(timeout=2000)
+        print("  - Enabled English captions.")
+
+    except Exception as e:
+        # ⚠️ Log but continue execution
+        print(f"  - [WARN] One or more UI triggers failed: {e}")
+
+    # 🎯 Continue to look for download button regardless
+    try:
+        print("  - Looking for download button...")
+        await page.wait_for_selector("button.btn.btn-default.btn-xs.btnVodDownload", timeout=5000)
+        await page.click("button.btn.btn-default.btn-xs.btnVodDownload")
+        print("  - ✅ Clicked Download button. Waiting for request...")
+        await page.wait_for_timeout(7000)
+    except Exception as e:
+        print(f"  - [WARN] Download button not found or click failed: {e}")
+
+
+async def handle_viebit_url_old(page: 'Page'):
     """Performs the UI trigger sequence for Viebit (Fremont) pages."""
     print("  - Detected Viebit platform. Executing trigger sequence...")
     await page.locator(".vjs-big-play-button").click(timeout=2000)
@@ -425,6 +729,17 @@ async def handle_viebit_url(page: 'Page'):
     await page.wait_for_timeout(500)
     await page.locator("button.vjs-subs-caps-button").click(timeout=2000)
     await page.locator('.vjs-menu-item:has-text("English")').click(timeout=2000)
+
+    # Attach network listener
+    try:
+        print("  - Looking for download button...")
+        await page.wait_for_selector("button.btn.btn-default.btn-xs.btnVodDownload", timeout=5000)
+        await page.click("button.btn.btn-default.btn-xs.btnVodDownload")
+        print("  - Clicked Download button. Waiting for request...")
+        await page.wait_for_timeout(7000)
+    except Exception:
+        print("  - [WARN] Download button not found or click failed.")
+
 
 async def handle_cablecast_url(page: 'Page'):
     """UI trigger for Cablecast (video.js) players."""
@@ -674,7 +989,6 @@ def run_whisper_transcription(file_path: str, whisper_model="tiny"):
             print(f"[Cleanup] Deleted {wav_path}")
 
 
-
 async def fetch_transcript_for_url(url: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, channel="chrome")
@@ -691,19 +1005,22 @@ async def fetch_transcript_for_url(url: str):
             if captions_future.done():
                 return
             try:
-                resp_url = (response.url or "").lower()
+                resp_url = response.url or ""
+                resp_url_lower = resp_url.lower()
+                status = response.status
+                print(f"status: {resp_url} ({status})")
             except Exception:
                 return
 
             # Prefer captions playlists (we'll stitch segments later)
-            if resp_url.endswith(".m3u8") and "captions" in resp_url:
+            if resp_url_lower.endswith(".m3u8") and "captions" in resp_url_lower:
                 print(".m3u8 captutured in HTTP response")
                 if not captions_future.done():
                     captions_future.set_result(("m3u8", response.url))
                 return
 
             # Otherwise accept any .vtt file content directly
-            if ".vtt" in resp_url:
+            if ".vtt" in resp_url_lower:
                 print(".vtt captutured in HTTP response")
                 try:
                     vtt_text = await response.text()
@@ -714,17 +1031,43 @@ async def fetch_transcript_for_url(url: str):
                         captions_future.set_exception(e)
 
             # 🎯 Audio file (.mp3)
-            if resp_url.endswith(".mp3"):
+            if resp_url_lower.endswith(".mp3"):
                 print(".mp3 captutured in HTTP response")
                 logging.info(".mp3 captutured in HTTP response")
                 if not captions_future.done():
                     captions_future.set_result(("mp3", response.url))
                 return
+            
+            """
+            if resp_url_lower.endswith(".mp4"):
+                print("🎬 .mp4 captured in HTTP response:", resp_url)
+                logging.info(f".mp4 captured: {resp_url}")
+                if not captions_future.done():
+                    captions_future.set_result(("mp4", resp_url))
+                return
+            
+            # Redirect-based .mp4 via Location header
+            # this is added for https://townofboone.viebit.com/watch?hash=KAlN7UfIHwy6SPI6 url
+           
+            if "vod-download" in resp_url_lower:
+                try:
+                    headers = await response.all_headers()
+                    location = headers.get("location") or headers.get("Location")
+                    if location and location.lower().endswith(".mp4"):
+                        print(f"🎯 Found Location header pointing to MP4: {location}")
+                        if not captions_future.done():
+                            captions_future.set_result(("mp4", location))
+                        return
+                    else:
+                        print(f"[DEBUG] vod-download headers: {headers}")
+                except Exception as e:
+                    print(f"[WARN] Failed to read headers for vod-download: {e}")
 
+            """
         page.on("response", handle_response)
 
         try:
-            await page.goto(url, wait_until="load", timeout=450000)
+            await page.goto(url, wait_until="load", timeout=0)
 
             # strict platform routing (no generic fallback)
             if "granicus.com" in url:
@@ -748,7 +1091,7 @@ async def fetch_transcript_for_url(url: str):
 
             try:
                 # wait for either a .vtt payload or a captions.*.m3u8 URL
-                kind, payload = await asyncio.wait_for(captions_future, timeout=15)
+                kind, payload = await asyncio.wait_for(captions_future, timeout=45)
 
                 if kind == "vtt":
                     print("vtt is called")
@@ -760,6 +1103,12 @@ async def fetch_transcript_for_url(url: str):
                     logging.info("m3u8 is called")
                     stitched_vtt_text = await _stitch_vtt_from_m3u8(payload)
                     return parse_vtt(stitched_vtt_text)
+                
+                """
+                if kind == "mp4":
+                    print("🎯 MP4 captured, passing to Whisper fallback")
+                    return {"fallback": True, "url": url, "mp4_url": payload}
+                """
 
             except Exception as e:
                 print(f"[Captions] Network sniffing failed or timed out: {e}")
@@ -773,34 +1122,3 @@ async def fetch_transcript_for_url(url: str):
         finally:
             await browser.close()
 
-
-async def fetch_transcript_for_url_old(url: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        #browser = await p.chromium.launch(headless=True, channel="chrome")
-        context = await browser.new_context(viewport={"width": 1280, "height": 800})  # Set a standard viewport size
-        page = await context.new_page()
-        vtt_future = asyncio.Future()
-
-        async def handle_response(response):
-            if ".vtt" in response.url and not vtt_future.done():
-                try: vtt_future.set_result(await response.text())
-                except Exception as e:
-                    if not vtt_future.done(): vtt_future.set_exception(e)
-        
-        page.on("response", handle_response)
-        
-        try:
-            await page.goto(url, wait_until="load", timeout=450000)
-            if "granicus.com" in url:
-                await handle_granicus_url(page)
-            elif "viebit.com" in url:
-                await handle_viebit_url(page)
-            else:
-                raise ValueError("Unknown platform. Could not process URL.")
-            
-            vtt_content = await asyncio.wait_for(vtt_future, timeout=20)
-            return parse_vtt(vtt_content)
-        finally:
-            await browser.close()
- 
