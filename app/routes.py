@@ -10,8 +10,6 @@ from .scraper import fetch_transcript_for_url, fetch_youtube_transcript
 from .utils import extract_youtube_video_id
 from .db import transcripts_collection
 from celery_worker import whisper_fallback_task, celery_app, cancel_task
-import threading
-import requests
 
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
@@ -154,18 +152,3 @@ def process_transcript(url, save):
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
-
-# 🔹 Background keep-alive ping (every 5 minutes)
-
-def keep_alive_ping():
-    """Ping /health periodically so the app stays warm."""
-    while True:
-        try:
-            r = requests.get("http://127.0.0.1:5000/health", timeout=10)
-            print("[KeepAlive] Ping success:", r.status_code)
-        except Exception as e:
-            print("[KeepAlive] Ping failed:", e)
-        time.sleep(300)  # 5 minutes = 300 s
-
-ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
-ping_thread.start()
