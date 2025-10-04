@@ -36,7 +36,6 @@ logging.captureWarnings(True)
 # scraper.py
 
 async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None,mp4_url=None):
-    logging.info("fallback to whisper........")
     """
     FLOW
     1. If captions .m3u8 → stitch VTT.
@@ -56,6 +55,10 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             await page.goto(url, wait_until="networkidle", timeout=120000)
             html = await page.content()
             await browser.close()
+
+
+        
+
 
         # 1) Captions via .m3u8
         m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8(?:\?[^\s\"']+)?", html)
@@ -207,14 +210,14 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             captions_future: asyncio.Future = loop.create_future()
 
             async def handle_response(response):
-                print("[DEBUG] Response URL:", response.url)
+                #print("[DEBUG] Response URL:", response.url)
 
                 if captions_future.done():
                     return
                 try:
                     resp_url = response.url or ""
                     status = response.status
-                    print(f"status: {resp_url} ({status})")
+                    #print(f"status: {resp_url} ({status})")
                 except Exception:
                     return
             
@@ -261,6 +264,8 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
     # 🚫 If nothing worked at all
     return {"error": "No captions (.vtt/.m3u8) or audio/video found"}
+
+
 
 def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
     """
@@ -689,6 +694,7 @@ async def get_mp3_url(url: str):
 
 
 async def fetch_transcript_for_url(url: str):
+    print("fetch transcript for url...................")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, channel="chrome")
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
@@ -707,7 +713,7 @@ async def fetch_transcript_for_url(url: str):
                 resp_url = response.url or ""
                 resp_url_lower = resp_url.lower()
                 status = response.status
-                print(f"status: {resp_url} ({status})")
+                #print(f"status: {resp_url} ({status})")
             except Exception:
                 return
 
@@ -728,6 +734,17 @@ async def fetch_transcript_for_url(url: str):
                 except Exception as e:
                     if not captions_future.done():
                         captions_future.set_exception(e)
+
+            if resp_url_lower.endswith(".srt"):
+                print(".srt captured in HTTP response")
+                try:
+                    srt_text = await response.text()
+                    if not captions_future.done():
+                        captions_future.set_result(("srt", srt_text))
+                except Exception as e:
+                    if not captions_future.done():
+                        captions_future.set_exception(e)
+
 
             # 🎯 Audio file (.mp3)
             if resp_url_lower.endswith(".mp3"):
@@ -760,7 +777,11 @@ async def fetch_transcript_for_url(url: str):
             elif ".cvtv.org" in url:
                 return await process_cvtv_stream(url)
             else:
-                raise ValueError("Unknown platform. Could not process URL.")
+                #await fetch_texttracks(url)
+                print("[Info] Unknown platform detected. Proceeding with generic sniffing...")
+                # Wait for some seconds to allow video and captions to load
+                await page.wait_for_timeout(8000)
+                #raise ValueError("Unknown platform. Could not process URL.")
 
             try:
                 # wait for either a .vtt payload or a captions.*.m3u8 URL
@@ -776,6 +797,11 @@ async def fetch_transcript_for_url(url: str):
                     logging.info("m3u8 is called")
                     stitched_vtt_text = await _stitch_vtt_from_m3u8(payload)
                     return parse_vtt(stitched_vtt_text)
+
+                if kind == "srt":
+                    print("srt is called")
+                    logging.info("srt is called")
+                    return parse_vtt(payload)
 
             except Exception as e:
                 print(f"[Captions] Network sniffing failed or timed out: {e}")
