@@ -71,6 +71,7 @@ def process_transcript(url, save):
             if ".cvtv.org" in url:
                 task = whisper_fallback_task.delay(url)
                 last_msg = None  # Track last progress message
+                ast_ping = time.time()
 
                 while not task.ready():
                     try:
