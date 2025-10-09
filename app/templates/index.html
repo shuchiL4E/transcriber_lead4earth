@@ -4,11 +4,45 @@
   <meta charset="utf-8" />
   <title>Transcript Generator</title>
   <style>
-    body { font-family: system-ui, Arial, sans-serif; max-width: 800px; margin: 32px auto; }
-    .row { display: flex; gap: 8px; align-items: center; }
-    button[disabled] { opacity: 0.6; cursor: not-allowed; }
-    pre { white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
-    .muted { color: #666; }
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      max-width: 800px;
+      margin: 32px auto;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    button[disabled] {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    pre {
+      white-space: pre-wrap;
+      background: #f6f6f6;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    .muted {
+      color: #666;
+    }
+    /* 🔹 Progress bar styling */
+    .progress-container {
+      width: 100%;
+      background: #eee;
+      border-radius: 4px;
+      height: 10px;
+      margin: 12px 0;
+      overflow: hidden;
+    }
+    .progress-bar {
+      width: 0%;
+      height: 10px;
+      background: #4caf50;
+      border-radius: 4px;
+      transition: width 0.5s ease;
+    }
   </style>
 </head>
 <body>
@@ -24,23 +58,30 @@
 
   <p class="muted" id="status"></p>
 
+  <!-- 🔹 Progress bar container -->
+  <div class="progress-container">
+    <div id="progress-bar" class="progress-bar"></div>
+  </div>
+
   <h2>Transcript</h2>
   <pre id="result"></pre>
+
   <script>
     const form = document.getElementById("transcriptForm");
     const generateBtn = document.getElementById("generateBtn");
     const cancelBtn = document.getElementById("cancelBtn");
     const statusEl = document.getElementById("status");
     const resultEl = document.getElementById("result");
-  
+    const progressBar = document.getElementById("progress-bar");
+
     let controller = null;
-    let keepAliveTimer = null;   // 🔹 new
-  
-    function setLoading(isLoading, msg="") {
+    let keepAliveTimer = null;
+
+    function setLoading(isLoading, msg = "") {
       generateBtn.disabled = isLoading;
       cancelBtn.disabled = !isLoading;
       statusEl.textContent = msg;
-  
+
       if (isLoading) {
         // 🔹 start keep-alive ping every 5 minutes
         keepAliveTimer = setInterval(() => {
@@ -48,60 +89,77 @@
             .then(r => r.json())
             .then(data => console.log("Keep-alive:", data))
             .catch(err => console.warn("Keep-alive failed:", err));
-        }, 5 * 60 * 1000); // 5 minutes
+        }, 5 * 60 * 1000);
       } else {
         // 🔹 stop keep-alive when done
         if (keepAliveTimer) clearInterval(keepAliveTimer);
         keepAliveTimer = null;
       }
     }
-  
+
+    function updateProgress(step) {
+      const total = 4;
+      const percent = Math.floor((step / total) * 100);
+      progressBar.style.width = percent + "%";
+    }
+
     cancelBtn.addEventListener("click", () => {
       if (controller) controller.abort();
       setLoading(false, "Request canceled.");
+      updateProgress(0);
     });
-  
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       resultEl.textContent = "";
       statusEl.textContent = "";
-  
+      updateProgress(0);
+
       const urlVal = document.getElementById("url").value.trim();
       if (!urlVal) {
         statusEl.textContent = "Please paste a URL.";
         return;
       }
-  
+
       controller = new AbortController();
       const signal = controller.signal;
-  
       const formData = new FormData();
       formData.append("url", urlVal);
-  
+
       setLoading(true, "Streaming transcript…");
-  
+
       try {
         const res = await fetch("/transcript", { method: "POST", body: formData, signal });
-  
+
         if (!res.ok) {
           const maybeJson = await res.text();
           throw new Error(`Server error (${res.status}). ${maybeJson}`);
         }
-  
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let finalTranscript = "";
-  
+
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-  
+
           const chunk = decoder.decode(value, { stream: true });
           chunk.split("\n").forEach(line => {
             if (!line.trim()) return;
-  
+
             const lower = line.toLowerCase();
-            if (lower.includes("pending")) {
+
+            // 🔹 Detect progress steps from backend
+            if (line.startsWith("Step")) {
+              statusEl.textContent = line;
+              const match = line.match(/Step (\d)\/4/);
+              if (match) {
+                const step = parseInt(match[1]);
+                updateProgress(step);
+              }
+            }
+            else if (lower.includes("pending")) {
               statusEl.textContent = "⏳ " + line;
             } else if (lower.includes("started")) {
               statusEl.textContent = "🚀 " + line;
@@ -109,6 +167,7 @@
               statusEl.textContent = "🔄 " + line;
             } else if (lower.includes("completed")) {
               statusEl.textContent = "✅ " + line;
+              updateProgress(4);
             } else if (line.startsWith("[PID")) {
               statusEl.textContent = line; // metadata
             } else if (!lower.includes("failed")) {
@@ -118,9 +177,10 @@
             }
           });
         }
-  
+
         resultEl.textContent = finalTranscript;
-        statusEl.textContent = "Done.";
+        statusEl.textContent = "✅ Transcript generation complete.";
+        updateProgress(4);
       } catch (err) {
         if (err.name === "AbortError") {
           statusEl.textContent = "Request canceled.";
