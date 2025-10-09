@@ -71,7 +71,6 @@ def process_transcript(url, save):
             if ".cvtv.org" in url:
                 task = whisper_fallback_task.delay(url)
                 last_msg = None  # Track last progress message
-                last_ping = time.time()
 
                 while not task.ready():
                     try:
@@ -92,11 +91,7 @@ def process_transcript(url, save):
                     except Exception as e:
                         yield f"[Warn] Failed to poll task: {e}\n"
 
-                    # ✅ keep-alive ping every 5 min
-                    if time.time() - last_ping > 300:
-                        yield "💤 Still working... (keep-alive ping)\n"
-                        last_ping = time.time()
-
+                    
                     time.sleep(2)  # Poll every 2s
 
                 # ✅ Once done
@@ -149,9 +144,7 @@ def process_transcript(url, save):
                                     yield f"{msg}\n"
                                     last_msg = msg
 
-                                if time.time() - last_ping > 300:
-                                    yield "💤 Still working... (keep-alive ping)\n"
-                                    last_ping = time.time()
+                               
                                 time.sleep(2)
 
                             if task.successful():
