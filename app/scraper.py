@@ -16,7 +16,7 @@ import wave
 import time
 import subprocess
 import asyncio
-import html as html_unescape
+
 #NEW
 CABLECAST_H2_MAX_CONN = int(os.getenv("CABLECAST_H2_MAX_CONN", "48"))
 CABLECAST_H2_MAX_KEEPALIVE = int(os.getenv("CABLECAST_H2_MAX_KEEPALIVE", "48"))
@@ -56,10 +56,13 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             html = await page.content()
             await browser.close()
 
+
+        
+
+
         # 1) Captions via .m3u8
         m3u8_match = re.search(r"https?://[^\s\"']+\.m3u8(?:\?[^\s\"']+)?", html)
-        if status_cb:
-                status_cb("found_media", url)
+
         logging.info(".m3u8 found in HTML scanning.......")
         if m3u8_match:
             playlist_url = m3u8_match.group(0)
@@ -68,7 +71,7 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
                     pl = await client.get(playlist_url)
                     pl.raise_for_status()
                     if ".vtt" in pl.text:
-                        stitched_vtt_text = await _stitch_vtt_from_m3u8(playlist_url,status_cb)
+                        stitched_vtt_text = await _stitch_vtt_from_m3u8(playlist_url)
                         return parse_vtt(stitched_vtt_text)
             except Exception as e:
                 print(f"[Fallback] Failed m3u8 captions fetch: {e}")
@@ -78,32 +81,26 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
         # 2) Direct MP3
         mp3_match = re.search(r"https?://[^\s\"']+\.mp3", html)
         logging.info(".mp3 found in HTML scanning.......")
-        if status_cb:
-            status_cb("found_media", url)
+
         if mp3_match:
             mp3_url = mp3_match.group(0)
             try:
                 if status_cb:
-                    status_cb("transcription_started", url)
+                    status_cb("whisper_start", url)
                 result = await download_and_transcribe(mp3_url, whisper_model)
                 return result
             finally:
                 if status_cb:
-                    status_cb("transcription_completed", url)
+                    status_cb("whisper_done", url)
 
 
 
         # 3) Video-only HLS → optimized ffmpeg pipeline
         if m3u8_match:
-            if status_cb:
-                status_cb("found_media", url)
             logging.info(".m3u8.. trying to fetch HLS.......")
-            print(".m3u8.. trying to fetch HLS.......")
 
             start = time.time()
-            #playlist_url = m3u8_match.group(0)
-            playlist_url = html_unescape.unescape(m3u8_match.group(0))
-
+            playlist_url = m3u8_match.group(0)
             logging.info(f"Extracted playlist_url: {playlist_url}")
             print(f"Extracted playlist_url: {playlist_url}")
 
@@ -123,9 +120,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
                     print(f"[HLS] Trying {candidate_url} → {aac_file}")
                     logging.info(f"[HLS] Trying {candidate_url} → {aac_file}")
 
-                    if status_cb:
-                        status_cb("fetch_started", url)
-
                     subprocess.run([
                         "ffmpeg", "-y",
                         "-headers", f"Referer: {url}",
@@ -136,12 +130,9 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
                         aac_file
                     ], check=True)
                     t1 = time.time()
-
-                    
                     print(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
                     logging.info(f"[Timing] Fetch completed in {t1 - t0:.2f} sec")
 
-                    
                     # Step B: Convert AAC → WAV (quick)
                     print(f"[HLS] Converting AAC → WAV ({wav_file})")
                     logging.info(f"[HLS] Converting AAC → WAV ({wav_file})")
@@ -157,12 +148,13 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
                     logging.info(f"[Timing] Conversion completed in {t2 - t1:.2f} sec")
 
                     # Step C: Run Whisper
-                        
                     if status_cb:
-                        status_cb("transcription_started", url)
+                        status_cb("whisper_start", url)
                     transcript = transcribe_audio(wav_file, whisper_model)
 
-                    
+                    if status_cb:
+                        status_cb("whisper_done", url)
+
                     t3 = time.time()
                     print(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
                     logging.info(f"[Timing] Whisper transcription took {t3 - t2:.2f} sec")
@@ -192,7 +184,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
        
     try:
         logging.info(" Heavy fallback browser initiated...")
-        print(" Heavy fallback browser initiated...")
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -264,8 +255,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             mp4_url = None
             if kind == "mp4":
                     print("🎯 MP4 captured.........")
-                    if status_cb:
-                        status_cb("found_media", url)
                     mp4_url = payload
                     
             return handle_mp4(url,mp4_url,whisper_model="tiny", status_cb=None)
@@ -279,7 +268,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
 
 def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
-    print("handle mp4.........")
     """
     Handles remote MP4 → AAC → WAV → Whisper transcription.
 
@@ -298,8 +286,6 @@ def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
         t0 = time.time()
         print(f"⚡ [MP4] Extracting audio from remote MP4: {mp4_url}")
 
-        if status_cb:
-            status_cb("fetch_started", url)
         # Step A: Extract audio (AAC) directly from remote MP4 (stream)
         subprocess.run([
             "ffmpeg", "-y",
@@ -325,9 +311,11 @@ def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
 
         # Step C: Transcribe using Whisper
         if status_cb:
-            status_cb("transcription_started", url)
+            status_cb("whisper_start", url)
         transcript = transcribe_audio(wav_file, whisper_model)
-        
+        if status_cb:
+            status_cb("whisper_done", url)
+
         t3 = time.time()
         logging.info(f"[Timing] Whisper transcription completed in {t3 - t2:.2f}s")
         print(f"✅ [Timing] Whisper transcription completed in {t3 - t2:.2f}s")
@@ -461,10 +449,7 @@ async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
     """
     CVTV pipeline that yields Whisper transcript lines as they are ready.
     """
-    if status_cb:
-        print("🔔 Triggering status_cb('fetching_audio')")  # ✅ Debug print
-        status_cb("fetching_audio", url)
-
+    print("cvtv...........")
     mp3_url = await get_mp3_url(url)
     if not mp3_url:
         yield "[Error] Failed to capture MP3 stream"
@@ -478,15 +463,9 @@ async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
         for chunk in resp.iter_content(8192):
             f.write(chunk)
 
-    if status_cb:
-        print("🔔 Triggering status_cb('audio_downloaded')")  # ✅ Debug print
-        status_cb("audio_downloaded", url)
-
-
     print("disk written with this audio file.....")
     if status_cb:
-        print("🔔 Triggering status_cb('transcription_started')")  # ✅ Debug print
-        status_cb("transcription_started")
+        status_cb("whisper_start")
 
     try:
         async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
@@ -495,8 +474,7 @@ async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
         if os.path.exists(audio_file):
             os.remove(audio_file)
         if status_cb:
-            print("🔔 Triggering status_cb('transcription_completed')")  # ✅ Debug print
-            status_cb("transcription_completed")
+            status_cb("whisper_done")
 
 async def stream_whisper_transcription_openai(file_path: str, whisper_model="tiny"):
     """
@@ -632,7 +610,7 @@ async def handle_cablecast_url(page: 'Page'):
 
 # NEW
 
-async def _stitch_vtt_from_m3u8(playlist_url: str,status_cb=None) -> str:
+async def _stitch_vtt_from_m3u8(playlist_url: str) -> str:
     """
     Download a captions .m3u8 and stitch all .vtt segments into a single VTT text.
     Optimized for Cablecast: HTTP/2, pooled connections, bounded concurrency, retries.
@@ -659,10 +637,6 @@ async def _stitch_vtt_from_m3u8(playlist_url: str,status_cb=None) -> str:
 
         if not seg_urls:
             raise RuntimeError("Captions playlist contained no segments")
-
-
-        if status_cb:
-           status_cb("transcription_started", "Fetching VTTs and creating transcript…")
 
         # 3) Fetch segments with bounded concurrency + retries
         sem = asyncio.Semaphore(CABLECAST_H2_MAX_CONN)
@@ -691,9 +665,6 @@ async def _stitch_vtt_from_m3u8(playlist_url: str,status_cb=None) -> str:
 
     if not chunks:
         raise RuntimeError("No caption segments could be downloaded")
-
-    if status_cb:
-        status_cb("transcription_completed", "Transcript creation complete ✅")
 
     # 5) Prepend header and join
     stitched_vtt = "WEBVTT\n\n" + "\n\n".join(chunks) + "\n"

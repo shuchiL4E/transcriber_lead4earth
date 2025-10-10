@@ -1,70 +1,110 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Transcript Generator</title>
   <style>
     body {
       font-family: system-ui, Arial, sans-serif;
-      max-width: 800px;
+      max-width: 850px;
       margin: 32px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+      color: #222;
     }
-    .row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
+    h1 { font-size: 26px; margin-bottom: 12px; }
+    h2 { margin-top: 40px; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    input[type="text"] {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 15px;
     }
-    button[disabled] {
-      opacity: 0.6;
-      cursor: not-allowed;
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      background: #007bff;
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    button:hover:not([disabled]) { background: #0056b3; }
+    button[disabled] { opacity: 0.6; cursor: not-allowed; }
+    pre {
+      white-space: pre-wrap;
+      background: #f6f6f6;
+      padding: 12px;
+      border-radius: 8px;
+      min-height: 120px;
+    }
+    .muted { color: #666; }
+    .section { margin-top: 40px; }
+    #status {
+      background: #eef7ff;
+      border: 1px solid #cce1ff;
+      padding: 12px;
+      border-radius: 8px;
+      margin: 12px 0;
+      font-size: 15px;
+      line-height: 1.4;
+      white-space: pre-line;
+    }
+    .progress-container {
+      width: 100%;
+      background-color: #f0f0f0;
+      border-radius: 8px;
+      overflow: hidden;
+      height: 14px;
+      margin: 10px 0;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background-color: #007bff;
+      transition: width 0.3s ease;
     }
     pre {
       white-space: pre-wrap;
       background: #f6f6f6;
       padding: 12px;
       border-radius: 8px;
-    }
-    .muted {
-      color: #666;
-    }
-    /* 🔹 Progress bar styling */
-    .progress-container {
-      width: 100%;
-      background: #eee;
-      border-radius: 4px;
-      height: 10px;
-      margin: 12px 0;
-      overflow: hidden;
-    }
-    .progress-bar {
-      width: 0%;
-      height: 10px;
-      background: #4caf50;
-      border-radius: 4px;
-      transition: width 0.5s ease;
+      min-height: 120px;
+      max-height: 400px;
+      overflow-y: auto;
     }
   </style>
 </head>
-<body>
-  <h1>Generate Transcript</h1>
 
-  <form id="transcriptForm" method="post" action="/transcript">
+<body>
+  <h1>🎧 Transcript Generator</h1>
+
+  <form id="transcriptForm" method="post">
     <div class="row">
-      <input type="text" id="url" name="url" placeholder="Paste video/page URL" size="60" required />
-      <button type="submit" id="generateBtn">Generate Transcript</button>
+      <input type="text" id="url" name="url" placeholder="Paste video/page URL" required />
+      <button type="submit" id="generateBtn">Generate</button>
       <button type="button" id="cancelBtn" disabled>Cancel</button>
     </div>
   </form>
 
-  <p class="muted" id="status"></p>
+  <div id="status" class="muted"></div>
+  <div class="progress-container"><div id="progressBar" class="progress-bar"></div></div>
 
-  <!-- 🔹 Progress bar container -->
-  <div class="progress-container">
-    <div id="progress-bar" class="progress-bar"></div>
+  <h2>Transcript Output</h2>
+  <pre id="result">(Transcript will appear here)</pre>
+
+  <div class="section">
+    <h2>Check Task Status</h2>
+    <div class="row">
+      <input type="text" id="taskIdInput" placeholder="Enter Token ID" />
+      <button type="button" onclick="checkTaskStatus()">Check Status</button>
+    </div>
+    <pre id="taskStatusOutput" class="muted"></pre>
   </div>
-
-  <h2>Transcript</h2>
-  <pre id="result"></pre>
 
   <script>
     const form = document.getElementById("transcriptForm");
@@ -72,52 +112,34 @@
     const cancelBtn = document.getElementById("cancelBtn");
     const statusEl = document.getElementById("status");
     const resultEl = document.getElementById("result");
-    const progressBar = document.getElementById("progress-bar");
-
+    const progressBar = document.getElementById("progressBar");
+    const progressContainer = document.querySelector(".progress-container");
     let controller = null;
-    let keepAliveTimer = null;
 
     function setLoading(isLoading, msg = "") {
       generateBtn.disabled = isLoading;
       cancelBtn.disabled = !isLoading;
-      statusEl.textContent = msg;
-
-      if (isLoading) {
-        // 🔹 start keep-alive ping every 5 minutes
-        keepAliveTimer = setInterval(() => {
-          fetch("/health")
-            .then(r => r.json())
-            .then(data => console.log("Keep-alive:", data))
-            .catch(err => console.warn("Keep-alive failed:", err));
-        }, 5 * 60 * 1000);
-      } else {
-        // 🔹 stop keep-alive when done
-        if (keepAliveTimer) clearInterval(keepAliveTimer);
-        keepAliveTimer = null;
+      if (msg) statusEl.textContent = msg;
+      if (!isLoading && statusEl.innerHTML.includes("Whisper fallback")) {
+        progressContainer.style.display = "none";
+        return;
       }
-    }
-
-    function updateProgress(step) {
-      const total = 4;
-      const percent = Math.floor((step / total) * 100);
-      progressBar.style.width = percent + "%";
+      progressContainer.style.display = isLoading ? "block" : "none";
     }
 
     cancelBtn.addEventListener("click", () => {
       if (controller) controller.abort();
-      setLoading(false, "Request canceled.");
-      updateProgress(0);
+      setLoading(false, "❌ Request canceled.");
     });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       resultEl.textContent = "";
-      statusEl.textContent = "";
-      updateProgress(0);
+      progressBar.style.width = "0%";
 
       const urlVal = document.getElementById("url").value.trim();
       if (!urlVal) {
-        statusEl.textContent = "Please paste a URL.";
+        statusEl.textContent = "⚠️ Please paste a valid URL.";
         return;
       }
 
@@ -125,15 +147,53 @@
       const signal = controller.signal;
       const formData = new FormData();
       formData.append("url", urlVal);
-
-      setLoading(true, "Streaming transcript…");
+      setLoading(true, "🚀 Starting transcription...");
 
       try {
         const res = await fetch("/transcript", { method: "POST", body: formData, signal });
+        const contentType = res.headers.get("content-type") || "";
 
         if (!res.ok) {
-          const maybeJson = await res.text();
-          throw new Error(`Server error (${res.status}). ${maybeJson}`);
+          const maybeText = await res.text();
+          throw new Error(`Server error (${res.status}): ${maybeText}`);
+        }
+
+        // ✅ handle JSON-only responses (Celery or direct)
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+
+          if (data.task_id) {
+            statusEl.classList.remove("muted");
+            statusEl.innerHTML = data.message ? data.message.replace(/\n/g, "<br>") : `
+              🧠 Whisper fallback started.<br/>
+              📘 <strong>Task ID:</strong> ${data.task_id}<br/>
+              ⏳ Please copy this ID and check after <strong>15–20 minutes</strong> below.
+            `;
+            const taskInput = document.getElementById("taskIdInput");
+            if (taskInput) taskInput.value = data.task_id;
+            localStorage.setItem("last_task_id", data.task_id);
+            progressContainer.style.display = "none";
+            setLoading(false);
+            return;
+          }
+
+          if (data.transcript) {
+            resultEl.textContent = data.transcript;
+            statusEl.textContent = "✅ Completed (direct transcript).";
+            setLoading(false);
+            return;
+          }
+
+          if (data.error) {
+            statusEl.textContent = `❌ ${data.error}`;
+            setLoading(false);
+            return;
+          }
+        }
+
+        // ✅ handle stream (Gunicorn/SSE)
+        if (!res.body) {
+          throw new Error("No response body from server");
         }
 
         const reader = res.body.getReader();
@@ -143,54 +203,63 @@
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
           const chunk = decoder.decode(value, { stream: true });
+
           chunk.split("\n").forEach(line => {
-            if (!line.trim()) return;
-
             const lower = line.toLowerCase();
-
-            // 🔹 Detect progress steps from backend
-            if (line.startsWith("Step")) {
-              statusEl.textContent = line;
-              const match = line.match(/Step (\d)\/4/);
-              if (match) {
-                const step = parseInt(match[1]);
-                updateProgress(step);
-              }
-            }
-            else if (lower.includes("pending")) {
-              statusEl.textContent = "⏳ " + line;
-            } else if (lower.includes("started")) {
-              statusEl.textContent = "🚀 " + line;
+            if (!line.trim()) return;
+            if (lower.includes("started")) {
+              statusEl.textContent = "🚀 Started transcription...";
+              progressBar.style.width = "20%";
             } else if (lower.includes("progress")) {
-              statusEl.textContent = "🔄 " + line;
+              statusEl.textContent = "🔄 Processing audio...";
+              progressBar.style.width = "60%";
             } else if (lower.includes("completed")) {
-              statusEl.textContent = "✅ " + line;
-              updateProgress(4);
-            } else if (line.startsWith("[PID")) {
-              statusEl.textContent = line; // metadata
-            } else if (!lower.includes("failed")) {
-              finalTranscript += line + "\n";
+              statusEl.textContent = "✅ Completed!";
+              progressBar.style.width = "100%";
             } else {
-              statusEl.textContent = "❌ " + line;
+              finalTranscript += line + "\n";
             }
           });
         }
 
-        resultEl.textContent = finalTranscript;
-        statusEl.textContent = "✅ Transcript generation complete.";
-        updateProgress(4);
+        resultEl.textContent = finalTranscript || "(No transcript text found)";
+        statusEl.textContent = "✅ Done.";
       } catch (err) {
-        if (err.name === "AbortError") {
-          statusEl.textContent = "Request canceled.";
-        } else {
-          statusEl.textContent = `Error: ${err.message}`;
-        }
+        statusEl.textContent = `❌ Error: ${err.message}`;
       } finally {
         setLoading(false);
         controller = null;
       }
+    });
+
+    async function checkTaskStatus() {
+      const taskId = document.getElementById("taskIdInput").value.trim();
+      const outputEl = document.getElementById("taskStatusOutput");
+      if (!taskId) {
+        outputEl.textContent = "⚠️ Please enter a Task ID.";
+        return;
+      }
+      outputEl.textContent = "⏳ Checking...";
+      try {
+        const res = await fetch(`/status/${taskId}`);
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        outputEl.innerHTML = `
+          📘 <strong>Status:</strong> ${data.status}<br>
+          🔗 <strong>URL:</strong> ${data.url || "N/A"}<br>
+          🕓 <strong>Created:</strong> ${data.created_at || "N/A"}<br>
+          🕓 <strong>Completed:</strong> ${data.completed_at || "Pending"}<br>
+          🧾 <strong>Transcript:</strong><br><pre>${data.transcript || "(Not yet available)"}</pre>
+        `;
+      } catch (err) {
+        outputEl.textContent = `❌ ${err.message}`;
+      }
+    }
+
+    window.addEventListener("load", () => {
+      const savedId = localStorage.getItem("last_task_id");
+      if (savedId) document.getElementById("taskIdInput").value = savedId;
     });
   </script>
 </body>
