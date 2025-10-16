@@ -469,8 +469,8 @@ async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
         status_cb("whisper_start")
 
     try:
-        #async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
-        async for line in stream_faster_whisper_transcription(audio_file, whisper_model=whisper_model):
+        async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
+        #async for line in stream_faster_whisper_transcription(audio_file, whisper_model=whisper_model):
             yield line
     finally:
         if os.path.exists(audio_file):
