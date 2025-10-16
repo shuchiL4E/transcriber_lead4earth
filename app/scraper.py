@@ -16,6 +16,7 @@ import wave
 import time
 import subprocess
 import asyncio
+from faster_whisper import WhisperModel
 
 #NEW
 CABLECAST_H2_MAX_CONN = int(os.getenv("CABLECAST_H2_MAX_CONN", "48"))
@@ -468,7 +469,8 @@ async def process_cvtv_stream(url: str, whisper_model="tiny",status_cb=None):
         status_cb("whisper_start")
 
     try:
-        async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
+        #async for line in stream_whisper_transcription_openai(audio_file, whisper_model=whisper_model):
+        async for line in stream_faster_whisper_transcription(audio_file, whisper_model=whisper_model):
             yield line
     finally:
         if os.path.exists(audio_file):
@@ -502,6 +504,39 @@ async def stream_whisper_transcription_openai(file_path: str, whisper_model="tin
 
     if os.path.exists(wav_path):
         os.remove(wav_path)
+
+
+async def stream_faster_whisper_transcription(file_path: str, whisper_model="tiny"):
+    """
+    Convert MP3 → WAV and stream Faster-Whisper transcription line by line.
+    """
+    # 1️⃣ Convert MP3 to WAV
+    wav_path = os.path.splitext(file_path)[0] + ".wav"
+    subprocess.run([
+        "ffmpeg", "-y", "-i", file_path,
+        "-ar", "16000", "-ac", "1", wav_path
+    ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # 2️⃣ Load Faster-Whisper model (optimized for CPU)
+    model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
+
+    # 3️⃣ Transcribe (generator-style streaming)
+    segments, info = model.transcribe(
+        wav_path,
+        beam_size=5,
+        vad_filter=True,      # optional: removes long silences
+        word_timestamps=False # faster & lighter
+    )
+
+    # 4️⃣ Stream each segment as it’s produced
+    for segment in segments:
+        if segment.text.strip():
+            yield segment.text.strip()
+
+    # 5️⃣ Clean up
+    if os.path.exists(wav_path):
+        os.remove(wav_path)
+
 
 async def fetch_youtube_transcript(video_id: str):
     """
