@@ -368,8 +368,13 @@ async def download_and_transcribe(mp3_url: str, whisper_model="tiny"):
 
 
         # Run Whisper transcription
-        transcript = stream_whisper_transcription(audio_file, whisper_model=whisper_model)
-        return transcript
+        final_text = ""
+        async for chunk in stream_whisper_transcription(audio_file, whisper_model=whisper_model):
+            final_text += chunk
+
+        return final_text
+        #transcript = stream_whisper_transcription(audio_file, whisper_model=whisper_model)
+        #return transcript
 
     except Exception as e:
         logging.error(f"[Download] Failed: {e}", exc_info=True)
@@ -568,7 +573,31 @@ async def fetch_youtube_transcript(video_id: str):
         return "\n".join(transcript_lines)
 
 
+
 async def handle_granicus_url(page: 'Page'):
+    """Performs the UI trigger sequence for Granicus (Dublin) pages."""
+    print("  - Detected Granicus platform. Executing trigger sequence...")
+
+    try:
+        await page.locator(".flowplayer").hover(timeout=2000)
+
+        element = page.locator(".fp-menu").get_by_text("On", exact=True)
+        await element.scroll_into_view_if_needed(timeout=2000)
+        await element.click(force=True)
+
+        print("  ✅ 'On' caption button clicked successfully.")
+        return True
+
+    except Exception as e:
+        print(f"  ❌ Failed to click 'On' caption button: {e}")
+        # OPTIONAL: capture screenshot on failure
+        # await page.screenshot(path='/app/screenshots/on_click_failed.png')
+        return False
+
+
+
+
+async def handle_granicus_url_old(page: 'Page'):
     """Performs the UI trigger sequence for Granicus (Dublin) pages."""
     print("  - Detected Granicus platform. Executing trigger sequence...")
 #    await page.screenshot(path='/app/screenshots/before_click.png')
