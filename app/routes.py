@@ -39,6 +39,196 @@ def save_transcript():
     return process_transcript(url, save=True)
 
 
+@api_bp.route("/processmeeting", methods=["POST"])
+def process_meeting_transcript():
+    """
+    POST /processmeeting
+    {
+        "url": "<video_url>",
+        "meeting_id": "<meeting_identifier>"
+    }
+
+    - No frontend rendering (pure API use)
+    - If meeting_id exists → update transcript
+    - If not → insert new record
+    """
+    try:
+        data = request.get_json(force=True)
+        url = (data.get("url") or "").strip()
+        meeting_id = (data.get("meeting_id") or "").strip()
+
+        if not url:
+            return jsonify({"error": "URL is required"}), 400
+        if not meeting_id:
+            return jsonify({"error": "meeting_id is required"}), 400
+        if not url.startswith("http"):
+            url = "https://" + url.lstrip("/")
+
+        # Process transcript using existing logic
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        vid = extract_youtube_video_id(url)
+        if vid:
+            text = loop.run_until_complete(fetch_youtube_transcript(vid))
+        else:
+            text = loop.run_until_complete(fetch_transcript_for_url(url))
+
+        loop.close()
+
+        # Save or update based on meeting_id
+        existing = transcripts_collection.find_one({"meeting_id": meeting_id})
+
+        if existing:
+            transcripts_collection.update_one(
+                {"meeting_id": meeting_id},
+                {
+                    "$set": {
+                        "transcript": text,
+                        "status": "UPDATED",
+                        "url": url,
+                        "updated_at": datetime.datetime.utcnow(),
+                    }
+                },
+            )
+            action = "UPDATED"
+        else:
+            transcripts_collection.insert_one({
+                "meeting_id": meeting_id,
+                "url": url,
+                "transcript": text,
+                "status": "CREATED",
+                "created_at": datetime.datetime.utcnow(),
+            })
+            action = "CREATED"
+
+        return jsonify({
+            "meeting_id": meeting_id,
+            "url": url,
+            "status": action,
+            "transcript": text,
+            "timestamp": datetime.datetime.utcnow(),
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Error in /processmeeting for {url}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route("/meetingtranscript", methods=["POST"])
+def meeting_transcript():
+    """
+    POST /meetingtranscript
+    {
+        "url": "<video_url>",
+        "meeting_id": "<meeting_identifier>"
+    }
+
+    Workflow:
+    - Always ensure DB record exists first (insert or upsert placeholder)
+    - Then generate transcript
+    - Then update same meeting_id with final transcript or fallback status
+    """
+
+    try:
+        data = request.get_json(force=True)
+        url = (data.get("url") or "").strip()
+        meeting_id = (data.get("meeting_id") or "").strip()
+
+        # --- Validation ---
+        if not url:
+            return jsonify({"error": "URL is required"}), 400
+        if not meeting_id:
+            return jsonify({"error": "meeting_id is required"}), 400
+        if not url.startswith("http"):
+            url = "https://" + url.lstrip("/")
+
+        # --- Step 1: Always create (or upsert) placeholder first ---
+        transcripts_collection.update_one(
+            {"meeting_id": meeting_id},
+            {"$set": {
+                "url": url,
+                "transcript": None,
+                "status": "CREATED",
+                "updated_at": datetime.datetime.utcnow(),
+            },
+            "$setOnInsert": {
+                "created_at": datetime.datetime.utcnow(),
+            }},
+            upsert=True
+        )
+
+        # --- Step 2: Generate transcript (after DB record exists) ---
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        from app.scraper import fetch_transcript_for_url, fetch_youtube_transcript
+        from app.utils import extract_youtube_video_id
+
+        vid = extract_youtube_video_id(url)
+        if vid:
+            text = loop.run_until_complete(fetch_youtube_transcript(vid))
+        else:
+            text = loop.run_until_complete(fetch_transcript_for_url(url))
+
+        loop.close()
+
+        # --- Step 3: Handle Whisper fallback case ---
+        if isinstance(text, dict) and text.get("fallback"):
+            from celery_worker import whisper_fallback_task
+            whisper_fallback_task.delay(url, meeting_id)
+
+            transcripts_collection.update_one(
+                {"meeting_id": meeting_id},
+                {"$set": {
+                    "status": "IN_PROGRESS",
+                    "updated_at": datetime.datetime.utcnow(),
+                    "transcript": None
+                }},
+                upsert=False
+            )
+
+            return jsonify({
+                "meeting_id": meeting_id,
+                "message": "🧠 Whisper fallback started. Check again in ~15–20 minutes."
+            }), 202
+
+        # --- Step 4: Save completed transcript ---
+        transcripts_collection.update_one(
+            {"meeting_id": meeting_id},
+            {"$set": {
+                "transcript": text,
+                "status": "COMPLETED",
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+            upsert=False
+        )
+
+        return jsonify({
+            "meeting_id": meeting_id,
+            "url": url,
+            "status": "COMPLETED",
+            "message": "✅ Transcript generated successfully.",
+            "transcript": text
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Error in /meetingtranscript for {url if 'url' in locals() else 'N/A'}: {e}")
+        transcripts_collection.update_one(
+            {"meeting_id": meeting_id if 'meeting_id' in locals() else None},
+            {"$set": {
+                "status": "FAILED",
+                "error": str(e),
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+            upsert=False
+        )
+        return jsonify({
+            "meeting_id": meeting_id if 'meeting_id' in locals() else None,
+            "error": str(e)
+        }), 500
+
+
+
 @api_bp.route("/transcript", methods=["POST"])
 def transcript():
     if request.is_json:
@@ -160,6 +350,7 @@ def process_transcript(url, save):
 
     finally:
         loop.close()
+
 
 
 def process_transcript_streaming_response(url, save):

@@ -1,9 +1,11 @@
+import multiprocessing
+multiprocessing.set_start_method("spawn", force=True)
 import os
 import logging
 import asyncio
 from app.scraper import process_cvtv_stream, fallback_to_whisper_html
 from celery import Celery
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
 import datetime
 from app.db import transcripts_collection
 
@@ -25,8 +27,26 @@ celery_app = Celery("tasks", broker=redis_url, backend=redis_url)
 
 # Ensure STARTED is reported
 celery_app.conf.task_track_started = True
-# (Optional) smoother queueing for long jobs
-celery_app.conf.worker_prefetch_multiplier = 1
+celery_app.conf.worker_prefetch_multiplier = 1  # For smoother queueing
+
+
+# ---------------- Utility helpers ----------------
+
+def run_async(coro):
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(coro)
+
+    if loop.is_running():
+        while not task.done():
+            loop.stop()
+            loop.run_forever()
+        return task.result()
+    else:
+        return loop.run_until_complete(task)
+
 
 async def collect_lines(url: str, whisper_model="tiny", cb=None) -> str:
     """Iterate async generator; call cb(idx) every 20 lines for progress."""
@@ -38,49 +58,59 @@ async def collect_lines(url: str, whisper_model="tiny", cb=None) -> str:
             cb(idx)
     return "\n".join(buf)
 
+
+# ---------------- Celery Task ----------------
+
 @celery_app.task(bind=True, track_started=True)
-def whisper_fallback_task(self, url: str) -> str:
+def whisper_fallback_task(self, url: str, meeting_id: str) -> str:
     """
-    PENDING -> STARTED (auto) -> PROGRESS (periodic) -> SUCCESS/FAILURE
-    Returns full transcript (string) on success.
+    Celery fallback task for Whisper transcription.
+    Uses meeting_id to update Mongo record instead of task_id.
     """
-    task_id = self.request.id
     try:
+        logging.info(f"[Whisper Task] Started for meeting_id={meeting_id}, url={url}")
+
         if ".cvtv.org" in url:
             def report(idx: int):
                 self.update_state(
                     state="PROGRESS",
                     meta={"msg": f"Whisper transcription in progress ({idx} lines)"}
                 )
-            result = asyncio.run(collect_lines(url, whisper_model="tiny", cb=report))
+            result = run_async(collect_lines(url, whisper_model="tiny", cb=report))
         else:
-            # Lightweight path (non-CVTV). One progress ping for UI.
             self.update_state(state="PROGRESS", meta={"msg": "Fetching transcript..."})
-            result = asyncio.run(fallback_to_whisper_html(url, whisper_model="tiny"))
+            result = run_async(fallback_to_whisper_html(url, whisper_model="tiny"))
 
-        # ✅ Update Mongo document once done
+        # ✅ Update Mongo document by meeting_id
         transcripts_collection.update_one(
-            {"task_id": task_id},
+            {"meeting_id": meeting_id},
             {"$set": {
-                "status": "COMPLETED",
                 "transcript": result or "[Error] Whisper returned no text.",
-                "completed_at": datetime.datetime.utcnow()
-            }}
+                "status": "COMPLETED",
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+            upsert=True
         )
 
-        return result or "[Error] Whisper returned no text."
+        logging.info(f"[Whisper Task] Completed for meeting_id={meeting_id}")
+        return {"meeting_id": meeting_id, "status": "COMPLETED"}
+
     except Exception as e:
         # ❌ On failure
         transcripts_collection.update_one(
-            {"task_id": task_id},
+            {"meeting_id": meeting_id},
             {"$set": {
                 "status": "FAILED",
                 "error": str(e),
-                "completed_at": datetime.datetime.utcnow()
-            }}
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+            upsert=True
         )
-        logging.error(f"[{task_id}] Whisper task failed: {e}")
-        raise RuntimeError(f"Whisper task failed: {e}")
+        logging.error(f"[Whisper Task] Failed for meeting_id={meeting_id}: {e}")
+        raise RuntimeError(f"Whisper task failed for {meeting_id}: {e}")
+
+
+# ---------------- Cancel Helper ----------------
 
 def cancel_task(task_id, terminate=True):
     """
