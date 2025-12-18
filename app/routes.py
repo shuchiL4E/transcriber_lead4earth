@@ -6,7 +6,7 @@ import time
 import datetime
 import logging
 from flask import Blueprint, request, jsonify, Response, render_template, stream_with_context
-from .scraper import fetch_transcript_for_url, fetch_youtube_transcript
+from .scraper import fetch_transcript_for_url, fetch_youtube_transcript,youtube_whisper_fallback
 from .utils import extract_youtube_video_id
 from .db import transcripts_collection
 from celery_worker import whisper_fallback_task, celery_app, cancel_task
@@ -91,6 +91,7 @@ def process_transcript(url, save):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        '''
         vid = extract_youtube_video_id(url)
         if vid:
             # YouTube transcripts
@@ -109,6 +110,59 @@ def process_transcript(url, save):
                 "url": url,
                 "created_at": datetime.datetime.utcnow(),
             }), 200
+        '''
+
+        vid = extract_youtube_video_id(url)
+        if vid:
+            try:
+                text = loop.run_until_complete(fetch_youtube_transcript(vid))
+                print("text:")
+                print(text)
+
+                # If the function returns empty text, treat it like "no captions"
+                if not text or not text.strip():
+                    raise ValueError("No YouTube captions available (empty transcript).")
+
+                if save:
+                    transcripts_collection.insert_one({
+                        "url": url,
+                        "transcript": text,
+                        "status": "COMPLETED",
+                        "created_at": datetime.datetime.utcnow(),
+                    })
+
+                return jsonify({
+                    "status": "COMPLETED",
+                    "source": "youtube",
+                    "transcript": text,
+                    "url": url,
+                    "created_at": datetime.datetime.utcnow(),
+                }), 200
+
+            except Exception as e:
+                # ✅ YouTube captions not available → Whisper fallback
+                logging.info(f"YouTube captions failed for {url}. Falling back to Whisper. Reason: {e}")
+
+                task = whisper_fallback_task.delay(url)
+                transcripts_collection.insert_one({
+                    "url": url,
+                    "task_id": task.id,
+                    "status": "IN_PROGRESS",
+                    "transcript": None,
+                    "created_at": datetime.datetime.utcnow(),
+                })
+
+                return jsonify({
+                    "task_id": task.id,
+                    "status": "IN_PROGRESS",
+                    "message": (
+                        "🧠 Whisper fallback started (YouTube captions not available).\n"
+                        f"📘 Token ID: {task.id}\n\n"
+                        "⏳ Please copy this Token ID and check again after 15–20 minutes using the form below."
+                    )
+                }), 202
+
+
 
         # Non-YouTube: handle custom sources
         result = loop.run_until_complete(fetch_transcript_for_url(url))
@@ -159,7 +213,10 @@ def process_transcript(url, save):
         }), 500
 
     finally:
-        loop.close()
+        try:
+            loop.close()
+        except Exception:
+            pass
 
 
 def process_transcript_streaming_response(url, save):

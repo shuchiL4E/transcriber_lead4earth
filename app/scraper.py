@@ -17,6 +17,7 @@ import time
 import subprocess
 import asyncio
 from faster_whisper import WhisperModel
+import glob
 
 #NEW
 CABLECAST_H2_MAX_CONN = int(os.getenv("CABLECAST_H2_MAX_CONN", "48"))
@@ -50,6 +51,17 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
     """
    
     try:
+
+        if url.lower().endswith(".mp4"):
+            logging.info(f"[Direct MP4] Detected MP4 URL: {url}")
+            print(f"[Direct MP4] Transcribing from: {url}")
+            return handle_mp4(url, url, whisper_model=whisper_model)
+
+        if url.lower().endswith(".mp3"):
+            logging.info(f"[Direct MP3] Detected MP3 URL: {url}")
+            print(f"[Direct MP3] Transcribing from: {url}")
+            return await download_and_transcribe(url, whisper_model=whisper_model)
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -57,8 +69,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             html = await page.content()
             await browser.close()
 
-
-        
 
 
         # 1) Captions via .m3u8
@@ -182,7 +192,7 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
     # 🚨 Heavy Browser Fallback — Capture MP4 dynamically
         
-       
+    
     try:
         logging.info(" Heavy fallback browser initiated...")
         async with async_playwright() as p:
@@ -345,6 +355,57 @@ def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
                     logging.info(f"[Cleanup] Deleted {f}")
                 except Exception as e:
                     logging.warning(f"[Cleanup] Failed to delete {f}: {e}")
+
+
+def youtube_whisper_fallback(url: str, whisper_model="tiny") -> str:
+    print("in youtube whisper fallback.........")
+    """
+    Download YouTube best audio via yt-dlp, convert to 16k mono wav, transcribe via whisper.
+    Requires: yt-dlp + ffmpeg installed on the machine.
+    """
+    uid = str(uuid.uuid4())
+    outtmpl = f"yt_{uid}.%(ext)s"
+
+    # 1) Download best audio
+    subprocess.run(
+        ["yt-dlp", "-f", "bestaudio/best", "--no-playlist", "-o", outtmpl, url],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    print("subprocess done...............")
+    # Find the downloaded file (m4a/webm/etc.)
+    matches = glob.glob(f"yt_{uid}.*")
+    if not matches:
+        raise RuntimeError("yt-dlp finished but no audio file was created")
+
+    audio_path = matches[0]
+    print(audio_path)
+    wav_path = f"yt_{uid}.wav"
+    print(wav_path)
+
+    try:
+        # 2) Convert to wav (best for whisper)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        # 3) Transcribe
+        return transcribe_audio(wav_path, whisper_model=whisper_model)
+
+    finally:
+        for f in (audio_path, wav_path):
+            if f and os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+
+
 
 async def download_and_transcribe(mp3_url: str, whisper_model="tiny"):
     """
@@ -541,6 +602,7 @@ async def stream_faster_whisper_transcription(file_path: str, whisper_model="tin
     # 5️⃣ Clean up
     if os.path.exists(wav_path):
         os.remove(wav_path)
+
 
 
 async def fetch_youtube_transcript(video_id: str):
