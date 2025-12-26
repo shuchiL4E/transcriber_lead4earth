@@ -114,11 +114,11 @@ def process_transcript(url, save):
 
         vid = extract_youtube_video_id(url)
         if vid:
+            print("we found youtube video........")
             try:
                 text = loop.run_until_complete(fetch_youtube_transcript(vid))
-                print("text:")
+                print("-----------------------------------------------------------------------")  
                 print(text)
-
                 # If the function returns empty text, treat it like "no captions"
                 if not text or not text.strip():
                     raise ValueError("No YouTube captions available (empty transcript).")
