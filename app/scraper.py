@@ -1,7 +1,7 @@
 # app/scraper.py
 import asyncio
 from playwright.async_api import Page, async_playwright
-from .utils import parse_vtt
+from .utils import parse_vtt,parse_youtube_vtt
 import os
 import httpx
 from urllib.parse import urljoin
@@ -19,7 +19,8 @@ import asyncio
 from faster_whisper import WhisperModel
 import glob
 import sys
-
+import tempfile
+from pathlib import Path
 #NEW
 CABLECAST_H2_MAX_CONN = int(os.getenv("CABLECAST_H2_MAX_CONN", "48"))
 CABLECAST_H2_MAX_KEEPALIVE = int(os.getenv("CABLECAST_H2_MAX_KEEPALIVE", "48"))
@@ -356,8 +357,6 @@ def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
                     logging.info(f"[Cleanup] Deleted {f}")
                 except Exception as e:
                     logging.warning(f"[Cleanup] Failed to delete {f}: {e}")
-
-
 
 
 def youtube_whisper_fallback(url: str, whisper_model="tiny") -> str:
@@ -707,9 +706,70 @@ async def stream_faster_whisper_transcription(file_path: str, whisper_model="tin
     if os.path.exists(wav_path):
         os.remove(wav_path)
 
-
-
 async def fetch_youtube_transcript(video_id: str):
+    """
+    Fetch YouTube transcript using yt-dlp subtitles (manual or auto).
+    Returns plain text (parsed from VTT).
+    """
+    # video_id can be id or full url (routes.py currently passes id)
+    url = video_id if video_id.startswith("http") else f"https://www.youtube.com/watch?v={video_id}"
+
+    # Use the same cookies file style you already use in youtube_whisper_fallback
+    COOKIE_FILE = os.path.join(os.path.dirname(__file__), "cookies.txt")
+
+    if not os.path.exists(COOKIE_FILE):
+        raise RuntimeError(f"Cookies file not found: {COOKIE_FILE}")
+
+    # Use a temp folder so we don't clutter your project directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outtmpl = str(Path(tmpdir) / "%(id)s.%(ext)s")
+
+        cmd = [
+            "yt-dlp",
+            "--cookies", COOKIE_FILE,
+            "--skip-download",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs", "en",
+            "--sub-format", "vtt",
+            "-o", outtmpl,
+            url,
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"yt-dlp subtitle fetch failed (code={proc.returncode}). "
+                f"STDERR: {stderr.decode(errors='ignore')}"
+            )
+
+        # yt-dlp may produce multiple .vtt files (manual, auto, different locales)
+        vtt_files = sorted(Path(tmpdir).glob("*.vtt"))
+        if not vtt_files:
+            raise RuntimeError("No .vtt subtitles downloaded (no captions available).")
+
+        # Prefer the largest file (usually full transcript)
+        best_vtt = max(vtt_files, key=lambda p: p.stat().st_size)
+
+        vtt_text = best_vtt.read_text(encoding="utf-8", errors="ignore")
+
+        # ✅ You already have parse_vtt in utils; use it
+        transcript_text = parse_youtube_vtt(vtt_text)
+
+        # If parse_vtt returns empty, treat it as failure so your routes.py falls back to Whisper
+        if not transcript_text or not transcript_text.strip():
+            raise RuntimeError("Parsed VTT was empty (no usable captions).")
+
+        return transcript_text
+
+
+async def fetch_youtube_transcript_rapidapi(video_id: str):
     """
     Calls the RapidAPI service to get a transcript for a YouTube video.
     """
