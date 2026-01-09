@@ -706,7 +706,7 @@ async def stream_faster_whisper_transcription(file_path: str, whisper_model="tin
     if os.path.exists(wav_path):
         os.remove(wav_path)
 
-async def fetch_youtube_transcript(video_id: str):
+async def fetch_youtube_transcript_yt_dlp(video_id: str):
     """
     Fetch YouTube transcript using yt-dlp subtitles (manual or auto).
     Returns plain text (parsed from VTT).
@@ -769,7 +769,7 @@ async def fetch_youtube_transcript(video_id: str):
         return transcript_text
 
 
-async def fetch_youtube_transcript_rapidapi(video_id: str):
+async def fetch_youtube_transcript(video_id: str):
     """
     Calls the RapidAPI service to get a transcript for a YouTube video.
     """
@@ -790,18 +790,18 @@ async def fetch_youtube_transcript_rapidapi(video_id: str):
         response.raise_for_status() 
         
         data = response.json()
+        print(data)
 
-        print("TYPE:", type(data))
-        if isinstance(data, dict):
-            print("KEYS:", list(data.keys()))
+        if isinstance(data, dict) and data.get("success") is True:
+            transcript_items = (data.get("data") or {}).get("transcript")
+        else:
+            transcript_items = None
 
-        # Assuming the API returns a list of caption segments, each with a 'text' key.
-        # We join them together to form the full transcript.
-        if not isinstance(data, list):
-            raise TypeError("Expected a list of captions from the YouTube API.")
-        
-        transcript_lines = [item.get("text", "") for item in data]
-        return "\n".join(transcript_lines)
+        if not isinstance(transcript_items, list) or len(transcript_items) == 0:
+            raise TypeError("Expected transcript list at data.transcript from RapidAPI response.")
+
+        transcript_lines = [item.get("text", "") for item in transcript_items if isinstance(item, dict)]
+        return "\n".join([line for line in transcript_lines if line.strip()])
 
 
 
