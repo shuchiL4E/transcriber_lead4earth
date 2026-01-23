@@ -1,7 +1,7 @@
 # app/scraper.py
 import asyncio
 from playwright.async_api import Page, async_playwright
-from .utils import parse_vtt
+from .utils import parse_vtt,parse_youtube_vtt
 import os
 import httpx
 from urllib.parse import urljoin
@@ -17,7 +17,10 @@ import time
 import subprocess
 import asyncio
 from faster_whisper import WhisperModel
-
+import glob
+import sys
+import tempfile
+from pathlib import Path
 #NEW
 CABLECAST_H2_MAX_CONN = int(os.getenv("CABLECAST_H2_MAX_CONN", "48"))
 CABLECAST_H2_MAX_KEEPALIVE = int(os.getenv("CABLECAST_H2_MAX_KEEPALIVE", "48"))
@@ -50,6 +53,17 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
     """
    
     try:
+
+        if url.lower().endswith(".mp4"):
+            logging.info(f"[Direct MP4] Detected MP4 URL: {url}")
+            print(f"[Direct MP4] Transcribing from: {url}")
+            return handle_mp4(url, url, whisper_model=whisper_model)
+
+        if url.lower().endswith(".mp3"):
+            logging.info(f"[Direct MP3] Detected MP3 URL: {url}")
+            print(f"[Direct MP3] Transcribing from: {url}")
+            return await download_and_transcribe(url, whisper_model=whisper_model)
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -57,8 +71,6 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
             html = await page.content()
             await browser.close()
 
-
-        
 
 
         # 1) Captions via .m3u8
@@ -182,7 +194,7 @@ async def fallback_to_whisper_html(url: str, whisper_model="tiny",status_cb=None
 
     # 🚨 Heavy Browser Fallback — Capture MP4 dynamically
         
-       
+    
     try:
         logging.info(" Heavy fallback browser initiated...")
         async with async_playwright() as p:
@@ -345,6 +357,158 @@ def handle_mp4(url: str, mp4_url: str, whisper_model="tiny", status_cb=None):
                     logging.info(f"[Cleanup] Deleted {f}")
                 except Exception as e:
                     logging.warning(f"[Cleanup] Failed to delete {f}: {e}")
+
+
+def youtube_whisper_fallback(url: str, whisper_model="tiny") -> str:
+    print("in youtube whisper fallback.........")
+    """
+    Download YouTube best audio via yt-dlp, convert to 16k mono wav, transcribe via whisper.
+    Requires: yt-dlp + ffmpeg installed on the machine.
+    """
+    import os
+    import sys
+    import uuid
+    import glob
+    import subprocess
+
+    uid = str(uuid.uuid4())
+    outtmpl = f"yt_{uid}.%(ext)s"
+
+    # ✅ cookies file in SAME directory as this file
+    COOKIE_FILE = os.path.join(
+        os.path.dirname(__file__),
+        "cookies.txt"
+    )
+
+    if not os.path.exists(COOKIE_FILE):
+        raise RuntimeError(f"Cookies file not found: {COOKIE_FILE}")
+
+    # 1) Download best audio (with cookies)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m", "yt_dlp",
+            "--cookies", COOKIE_FILE,     # ✅ ONLY addition
+            "-f", "bestaudio/best",
+            "--no-playlist",
+            "-o", outtmpl,
+            url,
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    print("subprocess done...............")
+
+    # Find the downloaded file (m4a/webm/etc.)
+    matches = glob.glob(f"yt_{uid}.*")
+    if not matches:
+        raise RuntimeError("yt-dlp finished but no audio file was created")
+
+    audio_path = matches[0]
+    print(audio_path)
+    wav_path = f"yt_{uid}.wav"
+    print(wav_path)
+
+    try:
+        # 2) Convert to wav (best for whisper)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        # 3) Transcribe
+        return transcribe_audio(wav_path, whisper_model=whisper_model)
+
+    finally:
+        for f in (audio_path, wav_path):
+            if f and os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+
+
+def youtube_whisper_fallback123(url: str, whisper_model="tiny") -> str:
+    print("in youtube whisper fallback.........")
+    """
+    Download YouTube best audio via yt-dlp, convert to 16k mono wav, transcribe via whisper.
+    Requires: yt-dlp + ffmpeg installed on the machine.
+    """
+    uid = str(uuid.uuid4())
+    outtmpl = f"yt_{uid}.%(ext)s"
+
+    # ✅ cookies file in SAME directory as this file
+    COOKIE_FILE = os.path.join(
+        os.path.dirname(__file__),
+        "cookies.txt"
+    )
+
+    if not os.path.exists(COOKIE_FILE):
+        raise RuntimeError(f"Cookies file not found: {COOKIE_FILE}")
+
+    # 1) Download best audio
+    subprocess.run(
+        [
+            sys.executable,
+            "-m", "yt_dlp",
+            "--cookies", COOKIE_FILE,     # ✅ ONLY addition
+            "-f", "bestaudio/best",
+            "--no-playlist",
+            "-o", outtmpl,
+            url,
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    '''
+    subprocess.run(
+    [sys.executable, "-m", "yt_dlp", "-f", "bestaudio/best", "--no-playlist", "-o", outtmpl, url],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    '''
+
+    print("subprocess done...............")
+    # Find the downloaded file (m4a/webm/etc.)
+    matches = glob.glob(f"yt_{uid}.*")
+    if not matches:
+        raise RuntimeError("yt-dlp finished but no audio file was created")
+
+    audio_path = matches[0]
+    print(audio_path)
+    wav_path = f"yt_{uid}.wav"
+    print(wav_path)
+
+    try:
+        # 2) Convert to wav (best for whisper)
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        # 3) Transcribe
+        return transcribe_audio(wav_path, whisper_model=whisper_model)
+
+    finally:
+        for f in (audio_path, wav_path):
+            if f and os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+
+
 
 async def download_and_transcribe(mp3_url: str, whisper_model="tiny"):
     """
@@ -542,6 +706,68 @@ async def stream_faster_whisper_transcription(file_path: str, whisper_model="tin
     if os.path.exists(wav_path):
         os.remove(wav_path)
 
+async def fetch_youtube_transcript_yt_dlp(video_id: str):
+    """
+    Fetch YouTube transcript using yt-dlp subtitles (manual or auto).
+    Returns plain text (parsed from VTT).
+    """
+    # video_id can be id or full url (routes.py currently passes id)
+    url = video_id if video_id.startswith("http") else f"https://www.youtube.com/watch?v={video_id}"
+
+    # Use the same cookies file style you already use in youtube_whisper_fallback
+    COOKIE_FILE = os.path.join(os.path.dirname(__file__), "cookies.txt")
+
+    if not os.path.exists(COOKIE_FILE):
+        raise RuntimeError(f"Cookies file not found: {COOKIE_FILE}")
+
+    # Use a temp folder so we don't clutter your project directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        outtmpl = str(Path(tmpdir) / "%(id)s.%(ext)s")
+
+        cmd = [
+            "yt-dlp",
+            "--cookies", COOKIE_FILE,
+            "--skip-download",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs", "en",
+            "--sub-format", "vtt",
+            "-o", outtmpl,
+            url,
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"yt-dlp subtitle fetch failed (code={proc.returncode}). "
+                f"STDERR: {stderr.decode(errors='ignore')}"
+            )
+
+        # yt-dlp may produce multiple .vtt files (manual, auto, different locales)
+        vtt_files = sorted(Path(tmpdir).glob("*.vtt"))
+        if not vtt_files:
+            raise RuntimeError("No .vtt subtitles downloaded (no captions available).")
+
+        # Prefer the largest file (usually full transcript)
+        best_vtt = max(vtt_files, key=lambda p: p.stat().st_size)
+
+        vtt_text = best_vtt.read_text(encoding="utf-8", errors="ignore")
+
+        # ✅ You already have parse_vtt in utils; use it
+        transcript_text = parse_youtube_vtt(vtt_text)
+
+        # If parse_vtt returns empty, treat it as failure so your routes.py falls back to Whisper
+        if not transcript_text or not transcript_text.strip():
+            raise RuntimeError("Parsed VTT was empty (no usable captions).")
+
+        return transcript_text
+
 
 async def fetch_youtube_transcript(video_id: str):
     """
@@ -558,19 +784,24 @@ async def fetch_youtube_transcript(video_id: str):
     }
 
     async with httpx.AsyncClient() as client:
+        print("herrrrr")
         response = await client.get(api_url, headers=headers, timeout=30.0)
         # Raise an exception for bad status codes (4xx or 5xx)
         response.raise_for_status() 
         
         data = response.json()
+        print(data)
 
-        # Assuming the API returns a list of caption segments, each with a 'text' key.
-        # We join them together to form the full transcript.
-        if not isinstance(data, list):
-            raise TypeError("Expected a list of captions from the YouTube API.")
-        
-        transcript_lines = [item.get("text", "") for item in data]
-        return "\n".join(transcript_lines)
+        if isinstance(data, dict) and data.get("success") is True:
+            transcript_items = (data.get("data") or {}).get("transcript")
+        else:
+            transcript_items = None
+
+        if not isinstance(transcript_items, list) or len(transcript_items) == 0:
+            raise TypeError("Expected transcript list at data.transcript from RapidAPI response.")
+
+        transcript_lines = [item.get("text", "") for item in transcript_items if isinstance(item, dict)]
+        return "\n".join([line for line in transcript_lines if line.strip()])
 
 
 

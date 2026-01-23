@@ -8,6 +8,7 @@ from celery import Celery
 from dotenv import load_dotenv
 import datetime
 from app.db import transcripts_collection
+from app.scraper import process_cvtv_stream, fallback_to_whisper_html, youtube_whisper_fallback
 
 load_dotenv()
 
@@ -79,7 +80,13 @@ def whisper_fallback_task(self, url: str, meeting_id: str) -> str:
             result = run_async(collect_lines(url, whisper_model="tiny", cb=report))
         else:
             self.update_state(state="PROGRESS", meta={"msg": "Fetching transcript..."})
-            result = run_async(fallback_to_whisper_html(url, whisper_model="tiny"))
+
+            if "youtube.com" in url or "youtu.be" in url:
+                # ✅ YouTube: download bestaudio → ffmpeg → whisper
+                result = youtube_whisper_fallback(url, whisper_model="tiny")  # sync function
+            else:
+                result = asyncio.run(fallback_to_whisper_html(url, whisper_model="tiny"))
+
 
         # ✅ Update Mongo document by meeting_id
         transcripts_collection.update_one(
