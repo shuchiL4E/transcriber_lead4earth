@@ -10,6 +10,7 @@ from .scraper import fetch_transcript_for_url, fetch_youtube_transcript
 from .utils import extract_youtube_video_id
 from .db import transcripts_collection
 from celery_worker import whisper_fallback_task, celery_app, cancel_task
+from bson import ObjectId
 
 api_bp = Blueprint("api", __name__, template_folder="templates")
 
@@ -114,8 +115,138 @@ def process_meeting_transcript():
         logging.error(f"Error in /processmeeting for {url}: {e}")
         return jsonify({"error": str(e)}), 500
 
+
 @api_bp.route("/meetingtranscript", methods=["POST"])
 def meeting_transcript():
+    """
+    POST /meetingtranscript
+    {
+        "url": "<video_url>",
+        "meeting_id": "<meeting_identifier>"   # optional now
+    }
+
+    Behavior:
+    - If meeting_id is provided: upsert placeholder by meeting_id (idempotent)
+    - If meeting_id is missing: insert placeholder and track/update by Mongo _id
+    - If fallback required: enqueue Whisper and mark IN_PROGRESS
+    - Otherwise: update record to COMPLETED with transcript
+    """
+    try:
+        data = request.get_json(force=True)
+        url = (data.get("url") or "").strip()
+
+        # meeting_id is optional now
+        raw_meeting_id = data.get("meeting_id")
+        meeting_id = raw_meeting_id.strip() if isinstance(raw_meeting_id, str) else None
+
+        # --- Validation ---
+        if not url:
+            return jsonify({"error": "URL is required"}), 400
+        if not url.startswith("http"):
+            url = "https://" + url.lstrip("/")
+
+        # --- Step 1: Create placeholder record (get record_id) ---
+        if meeting_id:
+            transcripts_collection.update_one(
+                {"meeting_id": meeting_id},
+                {"$set": {
+                    "url": url,
+                    "transcript": None,
+                    "status": "CREATED",
+                    "updated_at": datetime.datetime.utcnow(),
+                },
+                "$setOnInsert": {
+                    "created_at": datetime.datetime.utcnow(),
+                }},
+                upsert=True
+            )
+            doc = transcripts_collection.find_one({"meeting_id": meeting_id}, {"_id": 1})
+            record_id = doc["_id"]  # ObjectId
+        else:
+            inserted = transcripts_collection.insert_one({
+                "meeting_id": None,
+                "url": url,
+                "transcript": None,
+                "status": "CREATED",
+                "created_at": datetime.datetime.utcnow(),
+                "updated_at": datetime.datetime.utcnow(),
+            })
+            record_id = inserted.inserted_id  # ObjectId
+
+        # --- Step 2: Generate transcript (after DB record exists) ---
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        vid = extract_youtube_video_id(url)
+        if vid:
+            text = loop.run_until_complete(fetch_youtube_transcript(vid))
+        else:
+            text = loop.run_until_complete(fetch_transcript_for_url(url))
+
+        loop.close()
+
+        # --- Step 3: Handle Whisper fallback case ---
+        if isinstance(text, dict) and text.get("fallback"):
+            whisper_fallback_task.delay(url, str(record_id))  # pass record_id
+
+            transcripts_collection.update_one(
+                {"_id": record_id},
+                {"$set": {
+                    "status": "IN_PROGRESS",
+                    "updated_at": datetime.datetime.utcnow(),
+                    "transcript": None
+                }}
+            )
+
+            return jsonify({
+                "record_id": str(record_id),
+                "meeting_id": meeting_id,
+                "message": "🧠 Whisper fallback started."
+            }), 202
+
+        # --- Step 4: Save completed transcript ---
+        transcripts_collection.update_one(
+            {"_id": record_id},
+            {"$set": {
+                "transcript": text,
+                "status": "COMPLETED",
+                "updated_at": datetime.datetime.utcnow(),
+            }}
+        )
+
+        return jsonify({
+            "record_id": str(record_id),
+            "meeting_id": meeting_id,
+            "url": url,
+            "status": "COMPLETED",
+            "message": "✅ Transcript generated successfully.",
+            "transcript": text
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Error in /meetingtranscript for {url if 'url' in locals() else 'N/A'}: {e}")
+
+        # mark FAILED if we created a record
+        if "record_id" in locals():
+            transcripts_collection.update_one(
+                {"_id": record_id},
+                {"$set": {
+                    "status": "FAILED",
+                    "error": str(e),
+                    "updated_at": datetime.datetime.utcnow(),
+                }}
+            )
+
+        return jsonify({
+            "record_id": str(record_id) if "record_id" in locals() else None,
+            "meeting_id": meeting_id if "meeting_id" in locals() else None,
+            "error": str(e)
+        }), 500
+
+
+
+@api_bp.route("/meetingtranscript1", methods=["POST"])
+def meeting_transcript1():
     """
     POST /meetingtranscript
     {

@@ -11,3 +11,88 @@
 2025-09-22 12:40:55,344 [WARNING]  * Debugger is active!
 2025-09-22 12:40:55,359 [INFO]  * Debugger PIN: 637-082-117
 2025-09-22 12:41:13,424 [INFO] 127.0.0.1 - - [22/Sep/2025 12:41:13] "POST /transcript HTTP/1.1" 200 -
+2026-01-17 07:52:43,789 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.3:5000
+2026-01-17 07:52:43,790 [INFO] [33mPress CTRL+C to quit[0m
+2026-01-17 07:52:43,884 [INFO]  * Restarting with watchdog (fsevents)
+2026-01-17 07:52:49,864 [WARNING]  * Debugger is active!
+2026-01-17 07:52:49,892 [INFO]  * Debugger PIN: 637-082-117
+2026-01-17 07:54:51,987 [INFO] 127.0.0.1 - - [17/Jan/2026 07:54:51] "GET /gettranscript HTTP/1.1" 200 -
+2026-01-17 07:54:54,556 [INFO] 127.0.0.1 - - [17/Jan/2026 07:54:54] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-01-17 07:56:07,648 [INFO] 127.0.0.1 - - [17/Jan/2026 07:56:07] "[31m[1mGET /processmeeting HTTP/1.1[0m" 405 -
+2026-01-17 07:56:43,865 [INFO] 127.0.0.1 - - [17/Jan/2026 07:56:43] "[31m[1mGET /meetingtranscript HTTP/1.1[0m" 405 -
+2026-01-17 07:56:48,701 [INFO] 127.0.0.1 - - [17/Jan/2026 07:56:48] "[31m[1mGET /transcript HTTP/1.1[0m" 405 -
+2026-01-17 07:56:57,118 [INFO] 127.0.0.1 - - [17/Jan/2026 07:56:57] "GET /gettranscript HTTP/1.1" 200 -
+2026-01-17 08:00:59,867 [INFO] 127.0.0.1 - - [17/Jan/2026 08:00:59] "[31m[1mGET /meetingtranscript HTTP/1.1[0m" 405 -
+2026-01-17 08:01:26,093 [INFO] 127.0.0.1 - - [17/Jan/2026 08:01:26] "[33mPOST /api/processmeeting HTTP/1.1[0m" 404 -
+2026-01-17 08:02:22,086 [INFO] 127.0.0.1 - - [17/Jan/2026 08:02:22] "[33mPOST /api/processmeeting HTTP/1.1[0m" 404 -
+2026-01-17 08:02:56,769 [INFO] vtt is called
+2026-01-17 08:02:58,962 [INFO] 127.0.0.1 - - [17/Jan/2026 08:02:58] "POST /processmeeting HTTP/1.1" 200 -
+2026-01-17 08:03:53,253 [INFO] vtt is called
+2026-01-17 08:03:53,653 [INFO] 127.0.0.1 - - [17/Jan/2026 08:03:53] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-17 10:24:35,929 [INFO] vtt is called
+2026-01-17 10:24:36,421 [INFO] 127.0.0.1 - - [17/Jan/2026 10:24:36] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-17 10:32:52,674 [INFO] vtt is called
+2026-01-17 10:32:53,066 [INFO] 127.0.0.1 - - [17/Jan/2026 10:32:53] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-17 10:54:09,259 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/app/routes.py', reloading
+2026-01-17 10:54:09,268 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105409.py', reloading
+2026-01-17 10:54:09,269 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105409.py', reloading
+2026-01-17 10:54:09,272 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251211163153.py', reloading
+2026-01-17 10:54:09,273 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251211163255.py', reloading
+2026-01-17 10:54:09,274 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251211163333.py', reloading
+2026-01-17 10:54:09,275 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251211163338.py', reloading
+2026-01-17 10:54:09,282 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251211163431.py', reloading
+2026-01-17 10:54:09,284 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251217180826.py', reloading
+2026-01-17 10:54:09,286 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218053118.py', reloading
+2026-01-17 10:54:09,287 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218053119.py', reloading
+2026-01-17 10:54:09,287 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218053120.py', reloading
+2026-01-17 10:54:09,287 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218053121.py', reloading
+2026-01-17 10:54:09,287 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218054224.py', reloading
+2026-01-17 10:54:09,288 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218054225.py', reloading
+2026-01-17 10:54:09,288 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218054923.py', reloading
+2026-01-17 10:54:09,288 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218054941.py', reloading
+2026-01-17 10:54:09,289 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218061519.py', reloading
+2026-01-17 10:54:09,289 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20251218071520.py', reloading
+2026-01-17 10:54:13,258 [INFO]  * Restarting with watchdog (fsevents)
+2026-01-17 10:54:22,312 [WARNING]  * Debugger is active!
+2026-01-17 10:54:22,333 [INFO]  * Debugger PIN: 637-082-117
+2026-01-17 10:58:42,978 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/app/routes.py', reloading
+2026-01-17 10:58:42,984 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105842.py', reloading
+2026-01-17 10:58:42,985 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105842.py', reloading
+2026-01-17 10:58:43,302 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/app/routes.py', reloading
+2026-01-17 10:58:43,312 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105843.py', reloading
+2026-01-17 10:58:43,313 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105843.py', reloading
+2026-01-17 10:58:43,516 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/app/routes.py', reloading
+2026-01-17 10:58:43,517 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/.history/app/routes_20260117105843.py', reloading
+2026-01-17 10:58:43,679 [INFO]  * Detected change in '/Users/home/Desktop/projects/transcriber_vanconver/app/routes.py', reloading
+2026-01-17 10:58:46,902 [INFO]  * Restarting with watchdog (fsevents)
+2026-01-17 10:58:54,027 [WARNING]  * Debugger is active!
+2026-01-17 10:58:54,042 [INFO]  * Debugger PIN: 637-082-117
+2026-01-17 10:59:10,498 [INFO] vtt is called
+2026-01-17 10:59:11,446 [INFO] 127.0.0.1 - - [17/Jan/2026 10:59:11] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-17 10:59:44,017 [INFO] vtt is called
+2026-01-17 10:59:44,439 [INFO] 127.0.0.1 - - [17/Jan/2026 10:59:44] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-17 11:01:38,776 [INFO] vtt is called
+2026-01-17 11:01:39,632 [INFO] 127.0.0.1 - - [17/Jan/2026 11:01:39] "POST /meetingtranscript HTTP/1.1" 200 -
+2026-01-22 15:47:17,178 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.2.11:5000
+2026-01-22 15:47:17,178 [INFO] [33mPress CTRL+C to quit[0m
+2026-01-22 15:47:17,250 [INFO]  * Restarting with watchdog (fsevents)
+2026-01-22 15:47:23,799 [WARNING]  * Debugger is active!
+2026-01-22 15:47:23,812 [INFO]  * Debugger PIN: 637-082-117
+2026-01-22 15:49:32,186 [INFO] 127.0.0.1 - - [22/Jan/2026 15:49:32] "GET /gettranscript HTTP/1.1" 200 -
+2026-01-22 15:49:35,372 [INFO] 127.0.0.1 - - [22/Jan/2026 15:49:35] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-01-22 15:53:36,661 [INFO] 127.0.0.1 - - [22/Jan/2026 15:53:36] "[31m[1mGET /meetingtranscript HTTP/1.1[0m" 405 -
+2026-01-22 15:53:45,350 [INFO] 127.0.0.1 - - [22/Jan/2026 15:53:45] "[31m[1mGET /processmeeting HTTP/1.1[0m" 405 -
+2026-01-22 15:53:52,722 [INFO] 127.0.0.1 - - [22/Jan/2026 15:53:52] "[31m[1mGET /processmeeting HTTP/1.1[0m" 405 -
+2026-01-22 15:54:05,537 [INFO] 127.0.0.1 - - [22/Jan/2026 15:54:05] "[31m[1mGET /meetingtranscript HTTP/1.1[0m" 405 -
+2026-01-22 15:54:07,251 [INFO] 127.0.0.1 - - [22/Jan/2026 15:54:07] "[31m[1mGET /processmeeting HTTP/1.1[0m" 405 -
+2026-01-22 15:54:16,288 [INFO] 127.0.0.1 - - [22/Jan/2026 15:54:16] "GET /gettranscript HTTP/1.1" 200 -
+2026-01-22 15:56:16,765 [INFO] 127.0.0.1 - - [22/Jan/2026 15:56:16] "[31m[1mPOST /transcript HTTP/1.1[0m" 400 -
+2026-01-22 15:56:32,788 [INFO] 127.0.0.1 - - [22/Jan/2026 15:56:32] "[31m[1mPOST /transcript HTTP/1.1[0m" 400 -
+2026-01-22 15:57:24,318 [INFO] vtt is called
+2026-01-22 15:57:25,053 [INFO] 127.0.0.1 - - [22/Jan/2026 15:57:25] "POST /meetingtranscript HTTP/1.1" 200 -
